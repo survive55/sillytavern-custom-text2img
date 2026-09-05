@@ -758,7 +758,7 @@ async function testNovelConnection() {
         setStatus('#cmi_novel_status', '輸入框有尚未套用的 Token，請先選擇「加密儲存」或「僅本次使用」。', 'error');
         return;
     }
-    setStatus('#cmi_novel_status', '測試 NovelAI 瀏覽器直連（標籤 API，不生圖）…');
+    setStatus('#cmi_novel_status', '驗證 NovelAI Token 與瀏覽器直連（唯讀帳戶 API，不生圖）…');
     $('#cmi_novel_test').prop('disabled', true);
     try {
         const result = await novelai.client(unlockedToken()).test();

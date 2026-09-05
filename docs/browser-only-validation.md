@@ -12,12 +12,12 @@
 | 驗證 | 結果 |
 |---|---|
 | 擴展 `npm run check` | JavaScript／JSON／manifest／舊相容入口檢查通過 |
-| 擴展 `npm test` | **86 tests passed**，包含新增直連／加密測試及舊功能回歸 |
+| 擴展 `npm test` | **87 tests passed**，包含新增直連／加密測試及舊功能回歸 |
 | 面板 `pytest tests/ -q` | **257 passed**；只有既有 Starlette/httpx deprecation warning |
 | GitHub 倉庫版 UI（`--layout=repository`） | 真實 ST 1.18 UI，三次測試生成共六張圖，所有 ST plugin API 均封鎖且沒有被呼叫 |
 | 獨立前端版 UI（`--layout=standalone`） | 相同流程通過；沒有 JS／初始化錯誤 |
 | 面板原生瀏覽器測試 | **不使用任何請求攔截**；11 次原生 CORS 預檢、22 次面板請求；真實面板 handler、假 GPU、兩張圖片；使用者隔離通過，未傳送環境 Cookie／ST CSRF Token |
-| 官方 NovelAI CORS | 無憑證 OPTIONS 探測：生成 POST 與標籤 GET 均允許 `Authorization, Content-Type`，回覆 `Access-Control-Allow-Origin: *` |
+| 官方 NovelAI CORS | 無憑證 OPTIONS 探測：生成 POST、唯讀帳戶 GET 均允許 `Authorization, Content-Type`，回覆 `Access-Control-Allow-Origin: *`；無效測試 Token 在帳戶 API 回覆 401 |
 | Patch whitespace | `git diff --check` 通過 |
 
 ## 覆蓋內容
@@ -25,6 +25,7 @@
 - 與舊後端的 NovelAI request builder 比對所有既有模型／取樣器／噪聲排程及顯式參數，包含 CFG=0、CFG Rescale、Seed=0、1–4 張批次與像素限制。
 - 官方 JSON 與 ZIP 多圖片解碼、PNG 檔頭／ZIP CRC 檢查、壓縮與解壓大小上限、非法／空白／過量回應。
 - Token 隨機 salt／IV、AES-GCM 完整性驗證、錯誤密語、資料篡改、KDF 參數上限、不安全 context 不退回明文保存。
+- v3.0.1 使用官方圖片服務 `GET /user/subscription` 免費、唯讀驗證 Token，不保存帳戶詳情；無效 Token 及只有公開標籤的回應不能被誤認為驗證成功。官方路徑見 [圖片 API 規格](https://image.novelai.net/docs/doc.json)。
 - 同分頁／Web Locks 防重、逾時、暫存限制、HTTP／網路／扣點錯誤不重送生圖；停止等待不取消已提交請求。
 - 面板 Origin／使用者／密碼版本綁定 Token、Cookie 與 Bearer 分離、狹窄 CORS 路由、禁止預設修改與通用代理。
 - 面板預設正負提示詞、LoRA、panel_values、group_states、解析度、批次及 64-bit 字串 Seed。

@@ -7,7 +7,7 @@
     "js": "extension/index.js",
     "css": "extension/style.css",
     "author": "st workspace",
-    "version": "3.0.0",
+    "version": "3.0.1",
     "homePage": "https://github.com/survive55/sillytavern-custom-text2img",
     "auto_update": false,
     "minimum_client_version": "1.18.0"

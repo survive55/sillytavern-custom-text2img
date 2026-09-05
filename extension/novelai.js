@@ -1,5 +1,5 @@
-import { HttpError, bytesToBase64, normalizeToken, readLimited, withTimeout } from './http.js';
-import { buildNovelAIRequest, MODELS } from './novelai-payload.js';
+import { HttpError, bytesToBase64, normalizeToken, readJson, withTimeout } from './http.js';
+import { buildNovelAIRequest } from './novelai-payload.js';
 import { MAX_IMAGE_TOTAL, readImages } from './images.js';
 
 export const NOVELAI_ORIGIN = 'https://image.novelai.net';
@@ -93,9 +93,17 @@ export function createNovelAI({ fetchImpl = (...args) => fetch(...args), now = D
             prepare: async signal => { signal?.throwIfAborted(); },
             async test(signal) {
                 const deadline = withTimeout(signal, 15000);
-                const response = await callApi(`/ai/generate-image/suggest-tags?model=${MODELS[0]}&prompt=landscape`, token, { method: 'GET' }, deadline);
-                await readLimited(response, 1024 * 1024, deadline);
-                return { ok: true, message: 'NovelAI 瀏覽器直連成功（標籤 API；未生圖、不扣 Anlas，不代表模型權限或餘額足夠）。' };
+                // The tag-suggestion endpoint can return 200 even for an invalid
+                // token. Use the image API's documented, read-only account route.
+                // https://image.novelai.net/docs/doc.json#/paths/~1user~1subscription
+                const response = await callApi('/user/subscription', token, { method: 'GET' }, deadline);
+                const subscription = await readJson(response, deadline, 1024 * 1024);
+                if (!subscription || typeof subscription !== 'object' || Array.isArray(subscription)
+                    || (!Number.isFinite(subscription.tier) && typeof subscription.active !== 'boolean') || subscription.error) {
+                    throw new HttpError(502, 'NovelAI 未回傳可驗證的帳戶狀態；不能判定 Token 有效。');
+                }
+                // Deliberately discard tier, expiry, perks and all other account data.
+                return { ok: true, message: 'NovelAI Token 驗證成功，瀏覽器直連成功（官方唯讀帳戶 API；未生圖、不扣 Anlas，不代表模型權限或餘額足夠）。' };
             },
             async submit(payload, signal) {
                 signal?.throwIfAborted();

@@ -87,12 +87,22 @@ test('NovelAI rejects malformed, empty, excessive and oversized responses with b
 
 test('connection test is read-only and never generates an image', async t => {
     const calls = [];
-    const api = createNovelAI({ locks: null, fetchImpl: async (url, init) => { calls.push({ url, init }); return Response.json({ tags: [] }); } });
+    const api = createNovelAI({ locks: null, fetchImpl: async (url, init) => { calls.push({ url, init }); return Response.json({ tier: 3, active: true, expiresAt: 123456 }); } });
     t.after(() => api.close());
     const result = await api.client('fake').test();
-    assert.match(result.message, /未生圖/); assert.equal(calls.length, 1);
-    assert.equal(calls[0].init.method, 'GET'); assert.match(calls[0].url, /\/ai\/generate-image\/suggest-tags\?/);
+    assert.match(result.message, /Token 驗證成功/); assert.match(result.message, /未生圖/); assert.equal(calls.length, 1);
+    assert.equal(calls[0].init.method, 'GET'); assert.equal(calls[0].url, `${NOVELAI_ORIGIN}/user/subscription`);
     assert.equal(calls[0].init.body, undefined);
+    assert.equal(result.tier, undefined); assert.equal(result.expiresAt, undefined);
+});
+
+test('public tags or an invalid token cannot be mistaken for a successful account verification', async t => {
+    for (const response of [Response.json({ tags: [] }), Response.json({ error: 'fake-secret' }, { status: 401 })]) {
+        const api = createNovelAI({ locks: null, fetchImpl: async () => response }); t.after(() => api.close());
+        await assert.rejects(api.client('fake').test(), error => {
+            assert.ok([401, 502].includes(error.status)); assert.ok(!error.message.includes('fake-secret')); return true;
+        });
+    }
 });
 
 test('billing/auth/network errors never retry or echo secrets, even when the direct response fails', async t => {

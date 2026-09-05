@@ -106,7 +106,7 @@ async function main() {
                 assert.equal(request.headers()['x-csrf-token'], undefined);
                 novelCalls.push({ path: target.pathname, method: request.method(), body: request.postDataJSON() });
                 const headers = { 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store' };
-                if (target.pathname.endsWith('/suggest-tags') && request.method() === 'GET') return route.fulfill({ status: 200, headers, json: { tags: [] } });
+                if (target.pathname === '/user/subscription' && request.method() === 'GET') return route.fulfill({ status: 200, headers, json: { tier: 3, active: true } });
                 if (target.pathname === '/ai/generate-image' && request.method() === 'POST') {
                     return novelFormat === 'json'
                         ? route.fulfill({ status: 200, headers, json: { images: [{ image: PNG_BASE64, seed: 0 }, { image: PNG_BASE64, seed: 1 }] } })
@@ -161,6 +161,9 @@ async function main() {
             if (!(await page.locator('#cmi_provider').isVisible())) await page.locator('#cmi_settings > .inline-drawer > .inline-drawer-toggle').click();
         }
         async function fixtureChat() {
+            // Extension assets load before APP_READY. Wait for all startup
+            // listeners to finish so they cannot overwrite token status mid-test.
+            await page.waitForFunction(() => window.SillyTavern?.getContext().eventSource.autoFireLastArgs.has('app_ready'));
             await page.evaluate(() => {
                 const original = SillyTavern.getContext.bind(SillyTavern), context = original();
                 window.__cmiSmoke = { promptProfiles: [], savedChats: 0 };
@@ -269,7 +272,7 @@ async function main() {
         savedChats += await page.evaluate(() => window.__cmiSmoke.savedChats);
         assert.equal(savedChats, 3); assert.equal(uploads.length, 6);
         assert.equal(novelCalls.filter(call => call.path === '/ai/generate-image').length, 2);
-        assert.equal(novelCalls.filter(call => call.path.endsWith('/suggest-tags')).length, 1);
+        assert.equal(novelCalls.filter(call => call.path === '/user/subscription').length, 1);
         for (const call of novelCalls.filter(call => call.body)) {
             assert.equal(call.body.parameters.n_samples, 2); assert.equal(call.body.parameters.seed, 0);
             assert.equal(call.body.parameters.cfg_rescale, 0); assert.ok(!JSON.stringify(call.body).includes(password));
@@ -277,7 +280,7 @@ async function main() {
         await openSettings(); await page.locator('#cmi_provider').selectOption('novelai');
         await page.locator('#cmi_settings').screenshot({ path: path.join(outputDir, `ui-smoke-${layout}.png`) });
         const manifest = await page.evaluate(async prefix => (await fetch(prefix + 'manifest.json')).json(), extensionPrefix);
-        assert.equal(manifest.version, '3.0.0');
+        assert.equal(manifest.version, require('../package.json').version);
         const entry = new URL(extensionPrefix + manifest.js, url.origin);
         const requiredAssets = [extensionPrefix + 'manifest.json', extensionPrefix + manifest.css,
             ...RUNTIME_FILES.filter(file => file.endsWith('.js') || file === 'settings.html').map(file => new URL(file, entry).pathname)];
