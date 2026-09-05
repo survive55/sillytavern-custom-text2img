@@ -3,7 +3,7 @@
     "version": "2.0.0",
     "description": "Integrated SillyTavern message illustrations with ComfyUI on Modal and the official NovelAI image API",
     "private": true,
-    "license": "UNLICENSED",
+    "license": "Apache-2.0",
     "type": "commonjs",
     "main": "index.js",
     "engines": {

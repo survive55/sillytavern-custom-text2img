@@ -1,6 +1,10 @@
-# sillytavern-custom-text2img
+# SillyTavern Custom Text2Img
 
 整合式 **SillyTavern 樓層插圖插件**：同一專案管理前端擴展和伺服器插件，可在同一設定介面切換 **ComfyUI on Modal 控制面板**與 **NovelAI 官方圖片 API**。
+
+[GitHub 專案](https://github.com/survive55/sillytavern-custom-text2img) · [問題回報](https://github.com/survive55/sillytavern-custom-text2img/issues) · [Apache-2.0 授權](LICENSE)
+
+> 本專案包含前端與後端，需安裝至 SillyTavern 伺服器；不能只透過網頁中的「安裝擴展」完成安裝。這是第三方插件，並非 SillyTavern、NovelAI 或 Modal 官方專案。
 
 ## 功能
 
@@ -22,6 +26,7 @@ sillytavern-custom-text2img/
 ├── extension/                # 前端原始碼、manifest、設定 UI、輪詢及測試
 ├── scripts/install-ui.cjs    # 安裝／同步前端、舊版備份遷移
 ├── scripts/check.cjs         # JS/JSON、前後端版本與入口檢查
+├── LICENSE                   # Apache License 2.0
 ├── package.json
 └── package-lock.json
 ```
@@ -30,29 +35,63 @@ ST 原生需要前端與後端放在不同目錄；**這仍是一個專案和一
 
 ## 安裝
 
-需要 **Node.js >= 20.11**、**SillyTavern >= 1.18.0**，以及已啟用的內建 `connection-manager` 擴展。
+### 環境需求
 
-1. 將完整專案放在 `<SillyTavern>/plugins/sillytavern-custom-text2img/`（可由本地 Git clone 或複製）。不要在 ST 的「安裝擴展」對本專案根目錄直接安裝；根目錄是 server plugin。
-2. 在本專案目錄執行：
+- **SillyTavern >= 1.18.0**、**Node.js >= 20.11** 與 Git，並能操作 ST 伺服器的檔案及設定。
+- 啟用 ST 內建的 `connection-manager` 擴展，準備一個用來撰寫圖片提示詞的 API 連線設定檔。
+- 至少準備一種生圖來源：
+  - **NovelAI**：具備圖片生成權限的帳號及 Persistent API Token；生成可能消耗 Anlas。
+  - **ComfyUI / Modal**：已部署、支援任務輪詢 API 的 **ComfyUI on Modal 自訂控制面板**。控制面板不包含在本倉庫中，不能直接改填原生 ComfyUI 網址使用。
+
+### 安裝步驟
+
+1. 在 **SillyTavern 根目錄**開啟終端機，複製本專案：
 
    ```bash
+   git clone https://github.com/survive55/sillytavern-custom-text2img.git plugins/sillytavern-custom-text2img
+   ```
+
+   若目錄已存在，請依下方「更新」步驟處理。不要在 ST 的「安裝擴展」對本專案根目錄直接安裝；根目錄是 server plugin。
+
+2. 進入專案目錄，安裝依賴並同步前端：
+
+   ```bash
+   cd plugins/sillytavern-custom-text2img
    npm ci --ignore-scripts
    npm run install-ui -- --user default-user
    ```
 
-   已有舊前端 `st-comfy-modal-illustrator` 時，改用：
+   已有舊前端 `st-comfy-modal-illustrator` 時，將最後一行改為：
 
    ```bash
    npm run install-ui -- --user default-user --migrate
    ```
 
+   - `default-user` 請換成實際的 ST 使用者 handle；該使用者的資料目錄必須已存在。多使用者環境需為每個要使用插件的帳號分別同步前端。
    - 目標是 `data/<user>/extensions/sillytavern-custom-text2img/`。
-   - 安裝器先完整暫存，再替換目標。旧副本及旧前端會備份到 `data/<user>/extension-backups/`，不刪除聊天或設定。
+   - 安裝器先完整暫存，再替換目標。舊副本及舊前端會備份到 `data/<user>/extension-backups/`，不刪除聊天或設定。
    - 檔案相同時不重複安裝或備份。`--check` 僅比對：同步時 exit 0，不同步時 exit 1，不寫入。
-   - 自訂主目錄／資料目錄可加 `--sillytavern /path/to/ST --data-root /path/to/data`；`--user` 必須是已存在的使用者 handle。
+   - 自訂主目錄／資料目錄可加 `--sillytavern /path/to/ST --data-root /path/to/data`。
    - 不操作全域前端；若 `public/scripts/extensions/third-party/` 有同名或舊版擴展，會停止並提示先手動備份移出，避免雙重載入。
-3. 在 ST `config.yaml` 設定 `enableServerPlugins: true`，重新啟動 **SillyTavern**，然後重新整理 ST 網頁。安裝腳本本身不修改設定、不重啟服務。
+3. 在 ST 根目錄的 `config.yaml` 設定 `enableServerPlugins: true`，重新啟動 **SillyTavern**，然後重新整理 ST 網頁。安裝腳本本身不修改設定、不重啟服務。
 4. 擴展設定中應出現 **SillyTavern Custom Text2Img**。在「API 連線 → 連線設定檔」建立專門撰寫圖片提示詞的設定檔，再於本插件選擇它。
+
+### 更新
+
+以下命令在 `<SillyTavern>/plugins/sillytavern-custom-text2img/` 目錄內執行；若有本地修改，請先自行保存，不要強制覆寫：
+
+```bash
+git pull --ff-only
+npm ci --ignore-scripts
+npm run check
+npm test
+npm run install-ui -- --user default-user
+npm run install-ui -- --user default-user --check
+```
+
+請為每個使用本插件的 ST 使用者同步前端。後端更新後需重新啟動 **SillyTavern**，前端同步後需重新整理 ST 網頁；不要在前端部署副本內執行 Git 更新。
+
+ST 的 server-plugin 自動更新器只更新 Git 原始碼，**不會自動同步本專案的前端**，不能取代上述更新流程。若希望完全手動管理伺服器插件更新，可在 ST `config.yaml` 設定 `enableServerPluginsAutoUpdate: false`；此設定影響所有 server plugins。
 
 ### 從舊版本遷移
 
@@ -61,18 +100,6 @@ ST 原生需要前端與後端放在不同目錄；**這仍是一個專案和一
 - 首次載入時，舊 `extensionSettings.comfy_modal_illustrator` 的既有欄位會複製到 `sillytavern_custom_text2img`，預設來源仍是 ComfyUI。舊設定保留供回退；已有的新設定不會被覆蓋。
 - 路由根改為 `/api/plugins/sillytavern-custom-text2img`。舊 URL 不提供別名，外部客戶端須一起更新。
 - 回退時先移出新前端／後端，再將備份還原到舊目錄；不要讓兩個前端並存。
-
-### 更新本地程式碼
-
-```bash
-npm ci --ignore-scripts
-npm run check
-npm test
-npm run install-ui -- --user default-user
-npm run install-ui -- --user default-user --check
-```
-
-後端修改需重新啟動 ST，前端同步後需重新整理 ST。不要將更新副本当成新的 Git 原始碼。純本地 Git 沒有 remote/upstream；若 ST 的 server-plugin 自動更新器提示缺少 upstream，可自行把 `enableServerPluginsAutoUpdate` 設為 `false`。本專案不會設定遠端或推送。
 
 ## 使用 ComfyUI / Modal
 
@@ -167,6 +194,12 @@ CHROMIUM_EXECUTABLE_PATH=/path/to/chrome npm run test:ui -- http://127.0.0.1:800
 
 真實 NovelAI／Modal 成功出圖仍需使用者有效帳號與額度驗證；離線測試不能證明官方服務此刻可用或特定帳號享有模型權限。
 
+## 問題回報
+
+歡迎透過 [GitHub Issues](https://github.com/survive55/sillytavern-custom-text2img/issues) 回報問題或提出建議。請附上 SillyTavern／插件版本、Node.js 版本、生圖來源、重現步驟與已遮蔽敏感資料的錯誤訊息。
+
+Issues 是公開的，請勿貼出 API Token、密碼、Cookie、完整 secrets／設定檔或私人聊天內容；截圖也請先遮蔽敏感資訊。
+
 ## 參考
 
 - [SillyTavern Server Plugins](https://docs.sillytavern.app/for-contributors/server-plugins/)
@@ -174,4 +207,8 @@ CHROMIUM_EXECUTABLE_PATH=/path/to/chrome npm run test:ui -- http://127.0.0.1:800
 - [NovelAI 官方 Image API 文件](https://image.novelai.net/docs/index.html)／[機器可讀 schema](https://image.novelai.net/docs/doc.json)
 - [Persistent API Token 取得方式](https://docs.sillytavern.app/usage/api-connections/novelai/)
 
-本專案預設為私有本地套件（`private: true`, `UNLICENSED`），沒有自行指定遠端或授予開源許可；如需發佈，請由專案擁有者決定授權與發佈位置。
+## 授權
+
+本專案以 [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0.html) 釋出，完整條文見 [LICENSE](LICENSE)。第三方服務、模型及相依套件仍依各自的條款或授權使用。
+
+`package.json` 的 `private: true` 僅用於防止意外發佈至 npm，不代表 GitHub 倉庫為私有，也不影響本專案的 Apache-2.0 授權；請依上述 Git clone 流程安裝。
