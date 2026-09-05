@@ -27,4 +27,9 @@ assert.equal(plugin.info.id, pkg.name);
 assert.equal(manifest.version, pkg.version);
 assert.equal(typeof plugin.init, 'function');
 assert.equal(typeof plugin.exit, 'function');
-console.log('JavaScript syntax, JSON files, plugin exports and frontend/backend versions OK.');
+const repositoryManifest = require('../manifest.json');
+assert.deepEqual(repositoryManifest, { ...manifest, js: `extension/${manifest.js}`, css: `extension/${manifest.css}` });
+for (const [directory, entry] of [[root, repositoryManifest], [path.join(root, 'extension'), manifest]]) {
+    for (const file of [entry.js, entry.css]) assert.ok(fs.statSync(path.join(directory, file)).isFile(), `Missing browser asset: ${file}`);
+}
+console.log('JavaScript syntax, JSON files, plugin exports, installable manifests and frontend/backend versions OK.');

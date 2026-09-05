@@ -9,6 +9,7 @@ import { PROVIDER_DEFAULTS, SETTINGS_KEY, migrateSettings, providerConnection, b
 // and the startup DOM hook. No network, real credentials, chat files or paid APIs.
 const source = fs.readFileSync(new URL('../index.js', import.meta.url), 'utf8')
     .replace(/^import .*;\r?\n/gm, '')
+    .replaceAll('import.meta.url', JSON.stringify('http://127.0.0.1/scripts/extensions/third-party/sillytavern-custom-text2img/index.js'))
     .replace(/\ninit\(\)\.catch\([^\n]+\);\s*$/, '');
 assert.ok(!source.includes('init().catch'));
 const JOB = 'a'.repeat(32);
@@ -37,7 +38,7 @@ function fixture({ provider = 'novelai', configured = true, onSubmit = () => {},
     const button = { get: () => element, addClass() { return this; }, removeClass() { return this; }, closest: () => ({ attr: () => '0' }) };
     const toast = { find: () => ({ text() {} }) };
     const sandbox = {
-        console, structuredClone, AbortController, AbortSignal,
+        console, structuredClone, AbortController, AbortSignal, URL,
         SillyTavern: { getContext: () => context },
         $: () => ({ length: 1 }),
         toastr: Object.fromEntries(['info', 'warning', 'error', 'success', 'clear'].map(kind => [kind, (...args) => { notifications.push({ kind, args }); return toast; }])),

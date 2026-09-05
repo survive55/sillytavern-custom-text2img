@@ -14,12 +14,15 @@
  * workflow is only driven through the existing generate endpoint.
  */
 
-import { saveBase64AsFile } from '../../../utils.js';
-import { MEDIA_DISPLAY, MEDIA_SOURCE, MEDIA_TYPE, SCROLL_BEHAVIOR } from '../../../constants.js';
+// ST imports must not depend on whether the UI is at the repo root or in extension/.
+import { saveBase64AsFile } from '/scripts/utils.js';
+import { MEDIA_DISPLAY, MEDIA_SOURCE, MEDIA_TYPE, SCROLL_BEHAVIOR } from '/scripts/constants.js';
 import { generateWithPolling } from './generation.js';
 import { PROVIDER_DEFAULTS, migrateSettings, providerConnection, buildNovelPayload } from './providers.js';
 
-const EXTENSION_FOLDER = 'third-party/sillytavern-custom-text2img';
+// Works for both a GitHub clone (extension/) and the flat install-ui deployment.
+const EXTENSION_FOLDER = new URL('.', import.meta.url).pathname
+    .replace(/^\/scripts\/extensions\//, '').replace(/\/$/, '');
 const PLUGIN_BASE = '/api/plugins/sillytavern-custom-text2img';
 const BUTTON_CLASS = 'cmi_message_gen';
 const BUSY_CLASS = 'cmi_busy';
