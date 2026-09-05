@@ -1,0 +1,25 @@
+{
+    "name": "sillytavern-custom-text2img",
+    "version": "2.0.0",
+    "description": "Integrated SillyTavern message illustrations with ComfyUI on Modal and the official NovelAI image API",
+    "private": true,
+    "license": "UNLICENSED",
+    "type": "commonjs",
+    "main": "index.js",
+    "engines": {
+        "node": ">=20.11"
+    },
+    "scripts": {
+        "test": "node --test",
+        "check": "node scripts/check.cjs",
+        "test:ui": "node scripts/smoke-ui.cjs",
+        "install-ui": "node scripts/install-ui.cjs"
+    },
+    "dependencies": {
+        "yauzl": "^3.2.1"
+    },
+    "devDependencies": {
+        "express": "^4.21.2",
+        "playwright": "1.63.0"
+    }
+}

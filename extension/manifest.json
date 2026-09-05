@@ -1,0 +1,14 @@
+{
+    "display_name": "SillyTavern Custom Text2Img",
+    "loading_order": 100,
+    "requires": [],
+    "optional": [],
+    "dependencies": ["connection-manager"],
+    "js": "index.js",
+    "css": "style.css",
+    "author": "st workspace",
+    "version": "2.0.0",
+    "homePage": "",
+    "auto_update": false,
+    "minimum_client_version": "1.18.0"
+}

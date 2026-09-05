@@ -1,0 +1,79 @@
+.cmi-settings .cmi-section {
+    margin-top: 8px;
+    padding: 4px 8px;
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 6px;
+}
+
+.cmi-settings label {
+    display: block;
+    margin-top: 6px;
+}
+
+.cmi-settings .checkbox_label {
+    display: flex;
+}
+
+.cmi-settings .cmi-hint {
+    display: block;
+    opacity: 0.7;
+    margin: 2px 0 4px;
+}
+
+.cmi-settings .cmi-status {
+    opacity: 0.85;
+}
+
+.cmi-settings .cmi-status.ok {
+    color: var(--active, #6fbf73);
+}
+
+.cmi-settings .cmi-status.error {
+    color: var(--warning, #e06c75);
+}
+
+.cmi-settings .cmi-warning {
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+    padding: 8px;
+    margin: 4px 0 8px;
+    border: 1px solid var(--warning, #e06c75);
+    border-radius: 6px;
+}
+
+.cmi-settings .monospace {
+    font-family: var(--monoFontFamily, monospace);
+}
+
+.mes_button.cmi_message_gen.cmi_busy {
+    color: var(--active, #6fbf73);
+}
+
+.cmi-prompt-review textarea {
+    width: 100%;
+    min-height: 8em;
+    font-family: var(--monoFontFamily, monospace);
+}
+
+.cmi-settings .cmi-token-actions {
+    flex-wrap: wrap;
+    align-items: center;
+}
+
+.cmi-settings .cmi-token-actions .menu_button {
+    display: inline-flex;
+    flex: 0 0 auto;
+    width: auto;
+    max-width: 100%;
+    height: auto;
+    white-space: nowrap;
+    padding: 6px 8px;
+    margin: 3px 0;
+    align-items: center;
+    justify-content: center;
+}
+
+.cmi-settings .flex1 {
+    min-width: 0;
+}

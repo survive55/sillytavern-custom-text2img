@@ -1,0 +1,143 @@
+<div id="cmi_settings" class="cmi-settings">
+    <div class="inline-drawer">
+        <div class="inline-drawer-toggle inline-drawer-header">
+            <b>SillyTavern Custom Text2Img</b>
+            <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+        </div>
+        <div class="inline-drawer-content">
+            <div id="cmi_plugin_warning" class="cmi-warning" style="display: none;">
+                <i class="fa-solid fa-triangle-exclamation"></i>
+                <span>伺服器插件 <code>sillytavern-custom-text2img</code> 未載入。請確認 <code>config.yaml</code> 的 <code>enableServerPlugins: true</code>，並重新啟動 SillyTavern。</span>
+            </div>
+            <label class="checkbox_label" for="cmi_enabled">
+                <input id="cmi_enabled" type="checkbox" />
+                <span>啟用（在每個樓層顯示「生成插圖」按鈕）</span>
+            </label>
+            <label for="cmi_provider">生圖來源</label>
+            <select id="cmi_provider" class="text_pole">
+                <option value="comfy-modal">ComfyUI / Modal 控制面板</option>
+                <option value="novelai">NovelAI 官方 API</option>
+            </select>
+            <small class="cmi-hint">兩個來源的圖片參數各自保存；共用下方獨立的提示詞連線設定檔，不更動主聊天設定。</small>
+
+            <div class="inline-drawer cmi-section" data-cmi-provider="comfy-modal">
+                <div class="inline-drawer-toggle inline-drawer-header">
+                    <b><i class="fa-solid fa-server"></i> 圖片伺服器（ComfyUI on Modal 控制面板）</b>
+                    <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+                </div>
+                <div class="inline-drawer-content">
+                    <label for="cmi_base_url">Base URL（ComfyUI on Modal 控制面板的網址）</label>
+                    <input id="cmi_base_url" class="text_pole" type="text" placeholder="https://example.trycloudflare.com" />
+                    <small class="cmi-hint">可填控制面板的 Quick Tunnel 網址；與 ST 同機時也可填 <code>http://127.0.0.1:8800</code>。由 ST 伺服器登入並以短 HTTP 請求查詢任務，不依賴 SSE。不要填 SillyTavern 網址或 Modal 原生 ComfyUI 網址。</small>
+                    <label for="cmi_password">登入密碼（UI_SHARED_PASSWORD / UI_USERS 其中一個密碼）</label>
+                    <div class="flex-container alignItemsCenter">
+                        <input id="cmi_password" class="text_pole flex1" type="password" autocomplete="off" placeholder="password" />
+                        <div id="cmi_password_toggle" class="menu_button fa-solid fa-eye" title="顯示 / 隱藏密碼"></div>
+                    </div>
+                    <div class="flex-container alignItemsCenter flexGap5">
+                        <div id="cmi_test_connection" class="menu_button menu_button_icon"><i class="fa-solid fa-plug"></i><span>測試連線</span></div>
+                        <small id="cmi_connection_status" class="cmi-status"></small>
+                    </div>
+                    <hr />
+                    <label for="cmi_panel_preset">面板預設組合（讀取自圖片伺服器 <code>/api/presets</code>，只讀不寫）</label>
+                    <div class="flex-container alignItemsCenter flexGap5">
+                        <select id="cmi_panel_preset" class="text_pole flex1"><option value="">（不使用，採 workflow 預設值）</option></select>
+                        <div id="cmi_refresh_presets" class="menu_button fa-solid fa-rotate" title="重新讀取預設組合清單"></div>
+                    </div>
+                    <small class="cmi-hint">預設組合提供 panel_values / group_states / LoRA / 解析度 / 批次數；下方圖片參數若有填值會覆蓋它。</small>
+                    <label class="checkbox_label" for="cmi_use_preset_positive"><input id="cmi_use_preset_positive" type="checkbox" /><span>把預設正向提示詞接在 AI 生成的提示詞前面</span></label>
+                    <label class="checkbox_label" for="cmi_use_preset_negative"><input id="cmi_use_preset_negative" type="checkbox" /><span>負向提示詞留空時使用預設組合</span></label>
+                </div>
+            </div>
+
+            <div class="cmi-section" data-cmi-provider="novelai" style="display: none;">
+                <b><i class="fa-solid fa-cloud"></i> NovelAI 官方圖片 API</b>
+                <small class="cmi-hint">固定使用 <code>https://image.novelai.net/ai/generate-image</code>，不需要 ComfyUI、Modal 網址或密碼。</small>
+                <label for="cmi_novel_token">Persistent API Token</label>
+                <input id="cmi_novel_token" class="text_pole" type="password" autocomplete="new-password" placeholder="貼上 Token，再按儲存" />
+                <div class="flex-container flexGap5 cmi-token-actions">
+                    <button id="cmi_novel_save_token" class="menu_button" type="button">儲存 Token</button>
+                    <button id="cmi_novel_clear_token" class="menu_button" type="button">刪除 Token</button>
+                    <button id="cmi_novel_test" class="menu_button" type="button">測試 Token（不生圖）</button>
+                </div>
+                <small id="cmi_novel_status" class="cmi-status" aria-live="polite"></small>
+                <small class="cmi-hint">從 NovelAI 帳號設定取得 Persistent API Token，不要填帳號密碼。Token 僅儲存於 ST 當前使用者的 secrets 儲存區（ST 原生磁碟格式並非加密）；不放入插件設定，也不覆蓋主連線的 NovelAI Token。</small>
+                <label for="cmi_novel_model">模型</label>
+                <select id="cmi_novel_model" class="text_pole">
+                    <option value="nai-diffusion-4-5-full">NAI Diffusion Anime V4.5 Full</option>
+                    <option value="nai-diffusion-4-5-curated">NAI Diffusion Anime V4.5 Curated</option>
+                    <option value="nai-diffusion-4-full">NAI Diffusion Anime V4 Full</option>
+                    <option value="nai-diffusion-4-curated-preview">NAI Diffusion Anime V4 Curated</option>
+                    <option value="nai-diffusion-3">NAI Diffusion Anime V3</option>
+                    <option value="nai-diffusion-furry-3">NAI Diffusion Furry V3</option>
+                </select>
+                <div class="flex-container flexGap10">
+                    <div class="flex1"><label for="cmi_novel_sampler">取樣器</label><select id="cmi_novel_sampler" class="text_pole">
+                        <option value="k_euler_ancestral">Euler Ancestral</option><option value="k_euler">Euler</option>
+                        <option value="k_dpmpp_2m">DPM++ 2M</option><option value="k_dpmpp_sde">DPM++ SDE</option><option value="k_dpmpp_2s_ancestral">DPM++ 2S Ancestral</option>
+                    </select></div>
+                    <div class="flex1"><label for="cmi_novel_schedule">噪聲排程</label><select id="cmi_novel_schedule" class="text_pole">
+                        <option value="native">Native</option><option value="karras">Karras</option><option value="exponential">Exponential</option><option value="polyexponential">Polyexponential</option>
+                    </select></div>
+                </div>
+                <div class="flex-container flexGap10">
+                    <div class="flex1"><label for="cmi_novel_steps">Steps</label><input id="cmi_novel_steps" class="text_pole" type="number" min="1" max="50" step="1" /></div>
+                    <div class="flex1"><label for="cmi_novel_scale">Prompt Guidance / CFG</label><input id="cmi_novel_scale" class="text_pole" type="number" min="0" max="10" step="0.1" /></div>
+                    <div class="flex1"><label for="cmi_novel_cfg_rescale">CFG Rescale</label><input id="cmi_novel_cfg_rescale" class="text_pole" type="number" min="0" max="1" step="0.01" /></div>
+                </div>
+                <div class="flex-container flexGap10">
+                    <div class="flex1"><label for="cmi_novel_width">NovelAI 寬</label><input id="cmi_novel_width" class="text_pole" type="number" min="64" max="2048" step="64" /></div>
+                    <div class="flex1"><label for="cmi_novel_height">NovelAI 高</label><input id="cmi_novel_height" class="text_pole" type="number" min="64" max="2048" step="64" /></div>
+                    <div class="flex1"><label for="cmi_novel_batch_size">NovelAI 批次數</label><input id="cmi_novel_batch_size" class="text_pole" type="number" min="1" max="4" step="1" /></div>
+                </div>
+                <label for="cmi_novel_seed">NovelAI Seed（0–4294967295；空白或 -1 = 隨機）</label>
+                <input id="cmi_novel_seed" class="text_pole" type="text" placeholder="random" />
+                <label for="cmi_novel_negative">NovelAI 負向提示詞</label>
+                <textarea id="cmi_novel_negative" class="text_pole textarea_compact" rows="3"></textarea>
+                <small class="cmi-hint">插件限制：寬高為 64 的倍數、每張最多 3145728 像素、每次總計最多 4194304 像素。不自動添加品質或負向標籤。實際模型權限、可用參數與扣點依 NovelAI 帳號為準。</small>
+                <div class="cmi-warning">生圖可能消耗 Anlas，批次數大於 1 亦可能收費。僅在你點擊樓層按鈕時送出，失敗不自動重送；停止等待不代表取消扣點。結果在 ST 記憶體暫存 30 分鐘，重啟即消失。</div>
+            </div>
+
+            <div class="inline-drawer cmi-section">
+                <div class="inline-drawer-toggle inline-drawer-header">
+                    <b><i class="fa-solid fa-wand-magic-sparkles"></i> 提示詞生成（獨立連線設定檔）</b>
+                    <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+                </div>
+                <div class="inline-drawer-content">
+                    <label for="cmi_profile">連線設定檔（Connection Manager；含 API / 模型 / 預設，與主聊天完全獨立）</label>
+                    <div class="flex-container alignItemsCenter flexGap5">
+                        <select id="cmi_profile" class="text_pole flex1"><option value="">（請選擇）</option></select>
+                        <div id="cmi_refresh_profiles" class="menu_button fa-solid fa-rotate" title="重新整理設定檔清單"></div>
+                    </div>
+                    <small class="cmi-hint">尚無設定檔？到「API 連線」→「連線設定檔」建立一個（支援 Chat Completion 與 Text Completion）。</small>
+                    <label for="cmi_max_tokens">最大回應 token 數</label><input id="cmi_max_tokens" class="text_pole" type="number" min="16" max="4096" step="1" />
+                    <label for="cmi_history_depth">附帶前文樓層數（供 <code>\{{history}}</code> 使用，0 = 不附帶）</label><input id="cmi_history_depth" class="text_pole" type="number" min="0" max="50" step="1" />
+                    <label for="cmi_system_prompt">系統提示</label><textarea id="cmi_system_prompt" class="text_pole textarea_compact" rows="6"></textarea>
+                    <label for="cmi_user_template">使用者訊息模板</label><textarea id="cmi_user_template" class="text_pole textarea_compact" rows="8"></textarea>
+                    <small class="cmi-hint">可用巨集：<code>\{{message}}</code> 目標楼層、<code>\{{history}}</code> 前文、<code>\{{description}}</code> 角色描述、<code>\{{char}}</code>、<code>\{{user}}</code> 及其他 SillyTavern 巨集。</small>
+                    <label class="checkbox_label" for="cmi_review_prompt"><input id="cmi_review_prompt" type="checkbox" /><span>送出產圖前先檢視 / 編輯提示詞</span></label>
+                    <div id="cmi_restore_prompts" class="menu_button menu_button_icon"><i class="fa-solid fa-rotate-left"></i><span>還原預設模板</span></div>
+                </div>
+            </div>
+
+            <div class="inline-drawer cmi-section" data-cmi-provider="comfy-modal">
+                <div class="inline-drawer-toggle inline-drawer-header">
+                    <b><i class="fa-solid fa-image"></i> ComfyUI 圖片參數（留空 = 沿用預設 / workflow）</b>
+                    <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+                </div>
+                <div class="inline-drawer-content">
+                    <label for="cmi_negative">負向提示詞</label><textarea id="cmi_negative" class="text_pole textarea_compact" rows="3" placeholder="（留空則沿用預設組合）"></textarea>
+                    <div class="flex-container flexGap10">
+                        <div class="flex1"><label for="cmi_width">寬</label><input id="cmi_width" class="text_pole" type="number" min="64" max="4096" step="8" placeholder="auto" /></div>
+                        <div class="flex1"><label for="cmi_height">高</label><input id="cmi_height" class="text_pole" type="number" min="64" max="4096" step="8" placeholder="auto" /></div>
+                        <div class="flex1"><label for="cmi_batch_size">批次數</label><input id="cmi_batch_size" class="text_pole" type="number" min="1" max="8" step="1" placeholder="1" /></div>
+                        <div class="flex1"><label for="cmi_seed">Seed</label><input id="cmi_seed" class="text_pole" type="text" placeholder="random" /></div>
+                    </div>
+                    <label for="cmi_advanced">ComfyUI 進階覆寫（JSON，合併進生成請求；例如 <code>{"loras":[{"name":"x.safetensors","strength":0.7}]}</code>）</label>
+                    <textarea id="cmi_advanced" class="text_pole textarea_compact monospace" rows="3" placeholder="{}"></textarea>
+                    <small id="cmi_advanced_status" class="cmi-status"></small>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>

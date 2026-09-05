@@ -1,0 +1,17 @@
+node_modules/
+coverage/
+test-results/
+playwright-report/
+*.log
+*.tmp
+*.tgz
+.env
+.env.*
+!.env.example
+secrets.json
+config.yaml
+settings.json
+data/
+outputs/
+backups/
+.DS_Store
