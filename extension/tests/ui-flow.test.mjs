@@ -7,6 +7,7 @@ import { PROVIDER_DEFAULTS, SETTINGS_KEY, migrateSettings, providerConnection, b
 import { createNovelAI } from '../novelai.js';
 import { createPanelClient } from '../panel.js';
 import { normalizeToken } from '../http.js';
+import { createManualLlmClient, parseExtraHeaders } from '../manual-llm.js';
 import { encryptToken, decryptToken } from '../token-vault.js';
 import { PNG_BASE64, PNG_BYTES, JOB_ID, panelLogin } from './fixtures.mjs';
 
@@ -20,7 +21,9 @@ assert.ok(!source.includes('init().catch'));
 
 function fixture({ provider = 'novelai', configured = true, onSubmit = () => {}, replyError = false, review = false } = {}) {
     const calls = [], saves = [], notifications = [], prompts = [], reviews = [];
-    const settings = { ...PROVIDER_DEFAULTS, provider, enabled: true, profileId: 'independent', reviewPrompt: review,
+    const settings = { ...PROVIDER_DEFAULTS, provider, enabled: true, promptConnectionMode: 'profile', profileId: 'independent', reviewPrompt: review,
+        manualLlmBaseUrl: 'https://llm.example/v1', manualLlmPath: 'chat/completions', manualLlmModel: 'manual-model',
+        manualLlmApiKey: 'manual-secret-key', manualLlmApiKeyHeader: 'Authorization', manualLlmApiKeyPrefix: 'Bearer', manualLlmExtraHeaders: '',
         baseUrl: 'https://panel.trycloudflare.com', password: 'fake-panel-secret', panelPreset: 'read-only',
         seed: '18446744073709551613', novelBatchSize: 2 };
     let savedChats = 0, rendered = 0;
@@ -42,6 +45,7 @@ function fixture({ provider = 'novelai', configured = true, onSubmit = () => {},
         const body = init?.body ? JSON.parse(init.body) : {};
         calls.push({ url, body, init });
         if (url.endsWith('/api/browser/login')) return panelLogin();
+        if (url.endsWith('/chat/completions')) return Response.json({ choices: [{ message: { content: 'manual landscape, sunrise' } }] });
         if (url.endsWith('/presets/read-only')) return Response.json({ prompts: { positive: 'masterpiece', negative: 'blurry' }, loras: [{ name: 'test-lora' }] });
         if (url.endsWith('/generate/jobs') || url.endsWith('/ai/generate-image')) {
             onSubmit(context);
@@ -63,6 +67,7 @@ function fixture({ provider = 'novelai', configured = true, onSubmit = () => {},
         toastr: Object.fromEntries(['info', 'warning', 'error', 'success', 'clear'].map(kind => [kind, (...args) => { notifications.push({ kind, args }); return toast; }])),
         MEDIA_DISPLAY: { GALLERY: 'gallery' }, MEDIA_SOURCE: { GENERATED: 'generated' }, MEDIA_TYPE: { IMAGE: 'image' }, SCROLL_BEHAVIOR: { KEEP: 'keep' },
         PROVIDER_DEFAULTS, migrateSettings, providerConnection, buildNovelPayload, normalizeToken, encryptToken, decryptToken,
+        createManualLlmClient: options => createManualLlmClient({ fetchImpl: fakeFetch, ...options }), parseExtraHeaders,
         generateWithPolling: options => generateWithPolling({ ...options, delay: async signal => { await new Promise(resolve => setImmediate(resolve)); } }),
         createNovelAI: () => api, createPanelClient: connection => createPanelClient(connection, { fetchImpl: fakeFetch }),
         saveBase64AsFile: async (...args) => { saves.push(args); return `/images/test-${saves.length}.png`; },
@@ -86,6 +91,19 @@ test('real NovelAI button flow: direct official API, independent profile, prompt
     assert.ok(!JSON.stringify(f.calls).includes('fake-panel-secret'));
     assert.ok(f.calls.every(call => call.url.startsWith('https://image.novelai.net/')));
     assert.equal(f.notifications.some(item => item.kind === 'error'), false);
+});
+
+test('manual OpenAI-compatible prompt mode bypasses Connection Manager and uses its own model and API key', async t => {
+    const f = fixture(); t.after(f.close);
+    f.settings.promptConnectionMode = 'manual';
+    await f.run();
+    assert.equal(f.prompts.length, 0);
+    const llmCall = f.calls.find(call => call.url.endsWith('/chat/completions'));
+    assert.ok(llmCall);
+    assert.equal(llmCall.body.model, 'manual-model');
+    assert.equal(llmCall.init.headers.Authorization, 'Bearer manual-secret-key');
+    assert.equal(llmCall.body.messages[0].role, 'system');
+    assert.match(f.message.extra.media[0].title, /manual landscape/);
 });
 
 test('real panel flow preserves presets, LoRAs, 64-bit seed and frozen connection after switching settings', async t => {

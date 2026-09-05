@@ -3,7 +3,7 @@
 ## 成功標準
 
 - 使用原版 ST 的 GitHub 網頁擴展安裝結構，不需要 ST 伺服器插件、CORS proxy 或金鑰曝光設定。
-- 保留兩個來源的圖片參數、提示詞設定檔、預設／LoRA、批次、Seed 與樓層圖集。
+- 保留兩個來源的圖片參數、提示詞設定檔／手動 OpenAI 相容連線、預設／LoRA、批次、Seed 與樓層圖集。
 - NovelAI 採瀏覽器直連；依使用者確認，改用加密保存／分頁解鎖，並明確告知重整或關閉頁面可能遺失未完成結果。
 - ComfyUI／Modal 使用既有面板的新直連 API；保留背景任務、使用者隔離及工作流行為。
 
@@ -12,10 +12,11 @@
 | 驗證 | 結果 |
 |---|---|
 | 擴展 `npm run check` | JavaScript／JSON／manifest／舊相容入口檢查通過 |
-| 擴展 `npm test` | **87 tests passed**，包含新增直連／加密測試及舊功能回歸 |
+| 擴展 `npm test` | **95 tests passed**，包含手動 OpenAI 相容 LLM、直連／加密測試及舊功能回歸 |
 | 面板 `pytest tests/ -q` | **257 passed**；只有既有 Starlette/httpx deprecation warning |
-| GitHub 倉庫版 UI（`--layout=repository`） | 真實 ST 1.18 UI，三次測試生成共六張圖，所有 ST plugin API 均封鎖且沒有被呼叫 |
+| GitHub 倉庫版 UI（`--layout=repository`） | 真實 ST 1.18 UI，手動 OpenAI 相容 LLM 設定／測試及三次圖片生成通過，所有 ST plugin API 均封鎖且沒有被呼叫 |
 | 獨立前端版 UI（`--layout=standalone`） | 相同流程通過；沒有 JS／初始化錯誤 |
+| 手動 LLM 原生跨來源瀏覽器測試 | 真實 loopback HTTP 服務、不攔截 LLM 請求；無 CORS 回應被瀏覽器拒絕，允許來源的模型／Authorization／自訂 Header POST 成功且未攜帶 Cookie／ST CSRF |
 | 面板原生瀏覽器測試 | **不使用任何請求攔截**；11 次原生 CORS 預檢、22 次面板請求；真實面板 handler、假 GPU、兩張圖片；使用者隔離通過，未傳送環境 Cookie／ST CSRF Token |
 | 官方 NovelAI CORS | 無憑證 OPTIONS 探測：生成 POST、唯讀帳戶 GET 均允許 `Authorization, Content-Type`，回覆 `Access-Control-Allow-Origin: *`；無效測試 Token 在帳戶 API 回覆 401 |
 | Patch whitespace | `git diff --check` 通過 |
@@ -29,7 +30,7 @@
 - 同分頁／Web Locks 防重、逾時、暫存限制、HTTP／網路／扣點錯誤不重送生圖；停止等待不取消已提交請求。
 - 面板 Origin／使用者／密碼版本綁定 Token、Cookie 與 Bearer 分離、狹窄 CORS 路由、禁止預設修改與通用代理。
 - 面板預設正負提示詞、LoRA、panel_values、group_states、解析度、批次及 64-bit 字串 Seed。
-- 獨立 Connection Manager 請求、提示詞審閱、設定切換後沿用原連線、樓層變更保護與 ST 原生圖集附件。
+- 獨立 Connection Manager 請求與手動 OpenAI 相容 Chat Completions（自訂 Base URL／路徑／模型／Key Header／額外 Headers）、提示詞審閱、設定切換後沿用原連線、樓層變更保護與 ST 原生圖集附件。
 - 安裝工具在完全沒有 `plugins/` 的 ST 目錄也可同步前端；備份、回復、重複安裝與路徑安全回歸。
 
 ## 測試限制

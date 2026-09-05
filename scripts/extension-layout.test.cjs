@@ -23,7 +23,7 @@ for (const { name, directory, prefix } of layouts) {
         assert.equal(manifest.js, `${prefix}index.js`);
         assert.equal(manifest.css, `${prefix}style.css`);
         assert.ok(manifest.author);
-        assert.ok(manifest.dependencies.includes('connection-manager'));
+        assert.equal(manifest.dependencies, undefined, 'Manual LLM mode must load without Connection Manager');
         for (const file of [manifest.js, manifest.css, `${prefix}settings.html`]) {
             assert.ok(fs.statSync(path.join(directory, file)).isFile(), `Missing browser asset: ${file}`);
         }

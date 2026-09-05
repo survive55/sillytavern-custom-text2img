@@ -15,7 +15,7 @@
                 <option value="comfy-modal">ComfyUI / Modal 控制面板</option>
                 <option value="novelai">NovelAI 官方 API</option>
             </select>
-            <small class="cmi-hint">兩個來源的圖片參數各自保存；共用下方獨立的提示詞連線設定檔，不更動主聊天設定。</small>
+            <small class="cmi-hint">兩個來源的圖片參數各自保存；共用下方獨立的提示詞 LLM（Connection Manager 或手動 OpenAI 相容 API），不更動主聊天設定。</small>
 
             <div class="inline-drawer cmi-section" data-cmi-provider="comfy-modal">
                 <div class="inline-drawer-toggle inline-drawer-header">
@@ -100,18 +100,51 @@
                 <div class="cmi-warning">生圖可能消耗 Anlas，批次數大於 1 亦可能收費。僅在你點擊樓層按鈕時送出，失敗不自動重送；停止等待或鎖定 Token 不代表取消扣點。結果只在目前分頁暫存 30 分鐘；關閉／重整頁面可能遺失尚未保存的圖片，請等候存入聊天後再離開。</div>
             </div>
 
-            <div class="inline-drawer cmi-section">
+            <div id="cmi_prompt_section" class="inline-drawer cmi-section">
                 <div class="inline-drawer-toggle inline-drawer-header">
-                    <b><i class="fa-solid fa-wand-magic-sparkles"></i> 提示詞生成（獨立連線設定檔）</b>
+                    <b><i class="fa-solid fa-wand-magic-sparkles"></i> 提示詞生成（獨立 LLM 連線）</b>
                     <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
                 </div>
                 <div class="inline-drawer-content">
-                    <label for="cmi_profile">連線設定檔（Connection Manager；含 API / 模型 / 預設，與主聊天完全獨立）</label>
-                    <div class="flex-container alignItemsCenter flexGap5">
-                        <select id="cmi_profile" class="text_pole flex1"><option value="">（請選擇）</option></select>
-                        <div id="cmi_refresh_profiles" class="menu_button fa-solid fa-rotate" title="重新整理設定檔清單"></div>
+                    <label for="cmi_prompt_connection_mode">LLM 連線方式</label>
+                    <select id="cmi_prompt_connection_mode" class="text_pole">
+                        <option value="profile">Connection Manager 設定檔</option>
+                        <option value="manual">手動 OpenAI 相容 API</option>
+                    </select>
+                    <div data-cmi-prompt-connection="profile">
+                        <label for="cmi_profile">連線設定檔（含 API / 模型 / 預設，與主聊天完全獨立）</label>
+                        <div class="flex-container alignItemsCenter flexGap5">
+                            <select id="cmi_profile" class="text_pole flex1"><option value="">（請選擇）</option></select>
+                            <div id="cmi_refresh_profiles" class="menu_button fa-solid fa-rotate" title="重新整理設定檔清單"></div>
+                        </div>
+                        <small class="cmi-hint">尚無設定檔？到「API 連線」→「連線設定檔」建立一個（支援 Chat Completion 與 Text Completion）。</small>
                     </div>
-                    <small class="cmi-hint">尚無設定檔？到「API 連線」→「連線設定檔」建立一個（支援 Chat Completion 與 Text Completion）。</small>
+                    <div data-cmi-prompt-connection="manual" style="display: none;">
+                        <label for="cmi_manual_llm_base_url">Base URL</label>
+                        <input id="cmi_manual_llm_base_url" class="text_pole" type="text" placeholder="https://api.openai.com/v1" />
+                        <label for="cmi_manual_llm_path">Chat Completions 端點路徑</label>
+                        <input id="cmi_manual_llm_path" class="text_pole" type="text" placeholder="chat/completions" />
+                        <small class="cmi-hint">端點會接在 Base URL 後方，例如 <code>https://api.openai.com/v1</code> + <code>chat/completions</code>。非本機網址必須使用 HTTPS；請確認服務允許瀏覽器 CORS 與 Authorization／自訂 Header 預檢。遠端 HTTPS ST 直連本機 HTTP LLM 仍可能被瀏覽器的 Mixed Content／Private Network Access 政策阻擋。</small>
+                        <label for="cmi_manual_llm_model">模型名稱</label>
+                        <input id="cmi_manual_llm_model" class="text_pole" type="text" placeholder="gpt-4.1-mini" />
+                        <label for="cmi_manual_llm_api_key">API Key</label>
+                        <div class="flex-container alignItemsCenter">
+                            <input id="cmi_manual_llm_api_key" class="text_pole flex1" type="password" autocomplete="off" placeholder="sk-..." />
+                            <div id="cmi_manual_llm_api_key_toggle" class="menu_button fa-solid fa-eye" title="顯示 / 隱藏 API Key"></div>
+                        </div>
+                        <div class="flex-container flexGap10">
+                            <div class="flex1"><label for="cmi_manual_llm_api_key_header">API Key Header</label><input id="cmi_manual_llm_api_key_header" class="text_pole" type="text" placeholder="Authorization" /></div>
+                            <div class="flex1"><label for="cmi_manual_llm_api_key_prefix">API Key 前綴</label><input id="cmi_manual_llm_api_key_prefix" class="text_pole" type="text" placeholder="Bearer（可留空）" /></div>
+                        </div>
+                        <label for="cmi_manual_llm_extra_headers">額外 Headers（JSON 物件，可留空）</label>
+                        <textarea id="cmi_manual_llm_extra_headers" class="text_pole textarea_compact monospace" rows="3" placeholder='{"HTTP-Referer":"https://example.com"}'></textarea>
+                        <small id="cmi_manual_llm_headers_status" class="cmi-status"></small>
+                        <div class="flex-container alignItemsCenter flexGap5">
+                            <button id="cmi_manual_llm_test" class="menu_button" type="button"><i class="fa-solid fa-plug"></i> 測試 LLM</button>
+                            <small id="cmi_manual_llm_status" class="cmi-status" aria-live="polite"></small>
+                        </div>
+                        <div class="cmi-warning">API Key 會依你的選擇以明文保存在目前 SillyTavern 使用者的擴充設定中，並可能出現在設定匯出或備份。請勿分享設定檔，只在可信的 ST 網站與擴充中使用。測試會送出一個極短的 Chat Completions 請求，可能產生少量費用。</div>
+                    </div>
                     <label for="cmi_max_tokens">最大回應 token 數</label><input id="cmi_max_tokens" class="text_pole" type="number" min="16" max="4096" step="1" />
                     <label for="cmi_history_depth">附帶前文樓層數（供 <code>\{{history}}</code> 使用，0 = 不附帶）</label><input id="cmi_history_depth" class="text_pole" type="number" min="0" max="50" step="1" />
                     <label for="cmi_system_prompt">系統提示</label><textarea id="cmi_system_prompt" class="text_pole textarea_compact" rows="6"></textarea>

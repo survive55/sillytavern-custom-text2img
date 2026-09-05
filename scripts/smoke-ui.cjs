@@ -25,7 +25,7 @@ async function main() {
     const fixtureFiles = new Set(['manifest.json', ...RUNTIME_FILES.map(name => layout === 'repository' ? `extension/${name}` : name)]);
     const token = 'browser-smoke-fake-novel-token', phrase = 'browser smoke unlock phrase';
     const settingsKey = 'sillytavern_custom_text2img', password = 'browser-smoke-panel-password';
-    const panelCalls = [], panelSubmissions = [], fixtureErrors = [];
+    const panelCalls = [], panelSubmissions = [], manualLlmCalls = [], fixtureErrors = [];
     let polls = 0;
     const panel = http.createServer(async (request, response) => {
         try {
@@ -73,8 +73,42 @@ async function main() {
             response.writeHead(500); response.end('Fixture failed');
         }
     });
-    await new Promise(resolve => panel.listen(0, '127.0.0.1', resolve));
+    const manualLlmServer = http.createServer(async (request, response) => {
+        try {
+            manualLlmCalls.push({ method: request.method, path: request.url, origin: request.headers.origin,
+                requestedHeaders: request.headers['access-control-request-headers'] || '',
+                privateNetwork: request.headers['access-control-request-private-network'] || '',
+                authorization: request.headers.authorization, cookie: request.headers.cookie, csrf: request.headers['x-csrf-token'] });
+            const cors = { 'Access-Control-Allow-Origin': url.origin, Vary: 'Origin', 'Cache-Control': 'no-store' };
+            if (request.url === '/cors-denied') { response.writeHead(200, { 'Content-Type': 'text/plain' }); return response.end('no cors'); }
+            if (request.headers.origin !== url.origin || request.headers.cookie || request.headers['x-csrf-token']) {
+                response.writeHead(403, { ...cors, 'Content-Type': 'application/json' });
+                return response.end(JSON.stringify({ error: 'Invalid browser request' }));
+            }
+            if (request.method === 'OPTIONS') {
+                response.writeHead(204, { ...cors, 'Access-Control-Allow-Methods': 'POST',
+                    'Access-Control-Allow-Headers': request.headers['access-control-request-headers'] || 'Authorization, Content-Type',
+                    'Access-Control-Allow-Private-Network': 'true' });
+                return response.end();
+            }
+            assert.equal(request.method, 'POST'); assert.equal(request.url, '/v1/chat/completions');
+            assert.equal(request.headers.authorization, 'Bearer browser-smoke-manual-key');
+            assert.equal(request.headers['x-cmi-smoke'], 'native-cors');
+            const chunks = []; for await (const chunk of request) chunks.push(chunk);
+            const body = JSON.parse(Buffer.concat(chunks).toString());
+            manualLlmCalls[manualLlmCalls.length - 1].body = body;
+            response.writeHead(200, { ...cors, 'Content-Type': 'application/json' });
+            response.end(JSON.stringify({ choices: [{ message: { content: 'OK' } }] }));
+        } catch (error) {
+            fixtureErrors.push(error.message); response.writeHead(500); response.end('Manual LLM fixture failed');
+        }
+    });
+    await Promise.all([
+        new Promise(resolve => panel.listen(0, '127.0.0.1', resolve)),
+        new Promise(resolve => manualLlmServer.listen(0, '127.0.0.1', resolve)),
+    ]);
     const panelUrl = `http://127.0.0.1:${panel.address().port}`;
+    const manualLlmOrigin = `http://localhost:${manualLlmServer.address().port}`;
     let browser, savedVault = null, novelFormat = 'json';
     let blockedSettingsWrites = 0, savedChats = 0;
     const backendRequests = [], unexpectedWrites = [], pageErrors = [], initializationErrors = [], novelCalls = [], uploads = [];
@@ -93,7 +127,7 @@ async function main() {
         });
         // This ST fixture needs asset/write interception. Native CORS enforcement
         // is checked separately by the panel's interception-free browser smoke.
-        await context.route(target => target.origin !== panelUrl, async route => {
+        await context.route(target => ![panelUrl, manualLlmOrigin].includes(target.origin), async route => {
             const request = route.request(), target = new URL(request.url());
             if (!['http:', 'https:'].includes(target.protocol)) return route.continue();
             if (target.origin === 'https://image.novelai.net') {
@@ -127,7 +161,9 @@ async function main() {
             if (target.pathname === '/api/settings/get') {
                 const response = await route.fetch(), body = await response.json(), settings = JSON.parse(body.settings);
                 settings.extension_settings ??= {};
-                settings.extension_settings[settingsKey] = { provider: 'novelai', enabled: true, profileId: 'browser-fixture-profile',
+                settings.extension_settings[settingsKey] = { provider: 'novelai', enabled: true, promptConnectionMode: 'profile', profileId: 'browser-fixture-profile',
+                    manualLlmBaseUrl: `${manualLlmOrigin}/v1`, manualLlmPath: 'chat/completions', manualLlmModel: 'browser-smoke-model',
+                    manualLlmApiKey: 'browser-smoke-manual-key', manualLlmApiKeyHeader: 'Authorization', manualLlmApiKeyPrefix: 'Bearer', manualLlmExtraHeaders: '{"X-CMI-Smoke":"native-cors"}',
                     baseUrl: panelUrl, password, panelPreset: '', novelVault: savedVault, novelBatchSize: 2, novelSeed: '0', batchSize: 2 };
                 body.settings = JSON.stringify(settings);
                 return route.fulfill({ response, json: body });
@@ -159,6 +195,12 @@ async function main() {
         async function openSettings() {
             if (!(await page.locator('#rm_extensions_block').isVisible())) await page.locator('#extensions-settings-button > .drawer-toggle').click();
             if (!(await page.locator('#cmi_provider').isVisible())) await page.locator('#cmi_settings > .inline-drawer > .inline-drawer-toggle').click();
+        }
+        async function openPromptSettings() {
+            await openSettings();
+            if (!(await page.locator('#cmi_prompt_connection_mode').isVisible())) {
+                await page.locator('#cmi_prompt_section > .inline-drawer-toggle').click();
+            }
         }
         async function fixtureChat() {
             // Extension assets load before APP_READY. Wait for all startup
@@ -205,11 +247,20 @@ async function main() {
         }
 
         await page.goto(url.href, { waitUntil: 'domcontentloaded' });
+        const corsBypassed = await page.evaluate(async origin => {
+            try { await fetch(`${origin}/cors-denied`, { mode: 'cors' }); return true; } catch { return false; }
+        }, manualLlmOrigin);
+        assert.equal(corsBypassed, false, 'The browser must enforce cross-origin response headers');
         await page.locator('#cmi_settings').waitFor({ state: 'attached' });
-        await fixtureChat(); await openSettings();
+        await fixtureChat(); await openPromptSettings();
         assert.equal(await page.locator('#cmi_settings').count(), 1);
         assert.match(await page.locator('#cmi_install_mode').textContent(), /不需要 ST 後端/);
         assert.equal(await page.locator('#cmi_novel_model option').count(), 6);
+        await page.locator('#cmi_prompt_connection_mode').selectOption('manual');
+        await page.locator('#cmi_manual_llm_test').click();
+        await page.waitForFunction(() => document.querySelector('#cmi_manual_llm_status').textContent.includes('連線成功'));
+        assert.equal(await page.locator('#cmi_manual_llm_model').inputValue(), 'browser-smoke-model');
+        await page.locator('#cmi_prompt_connection_mode').selectOption('profile');
         await page.locator('#cmi_novel_save_token').click();
         assert.match(await page.locator('#cmi_novel_status').textContent(), /請先貼上/);
         await page.locator('#cmi_novel_token').fill(token);
@@ -273,6 +324,16 @@ async function main() {
         assert.equal(savedChats, 3); assert.equal(uploads.length, 6);
         assert.equal(novelCalls.filter(call => call.path === '/ai/generate-image').length, 2);
         assert.equal(novelCalls.filter(call => call.path === '/user/subscription').length, 1);
+        const manualPreflight = manualLlmCalls.find(call => call.method === 'OPTIONS');
+        const manualPost = manualLlmCalls.find(call => call.method === 'POST');
+        if (manualPreflight) {
+            assert.match(manualPreflight.requestedHeaders, /authorization/i);
+            assert.match(manualPreflight.requestedHeaders, /x-cmi-smoke/i);
+        }
+        assert.ok(manualPost); assert.equal(manualPost.authorization, 'Bearer browser-smoke-manual-key');
+        assert.equal(manualPost.cookie, undefined); assert.equal(manualPost.csrf, undefined);
+        assert.equal(manualPost.body.model, 'browser-smoke-model');
+        assert.deepEqual(manualPost.body.messages, [{ role: 'user', content: 'Reply with exactly: OK' }]);
         for (const call of novelCalls.filter(call => call.body)) {
             assert.equal(call.body.parameters.n_samples, 2); assert.equal(call.body.parameters.seed, 0);
             assert.equal(call.body.parameters.cfg_rescale, 0); assert.ok(!JSON.stringify(call.body).includes(password));
@@ -288,13 +349,18 @@ async function main() {
         assert.deepEqual(backendRequests, []); assert.deepEqual(unexpectedWrites, []); assert.deepEqual(fixtureErrors, []);
         assert.deepEqual(pageErrors, []); assert.deepEqual(initializationErrors, []);
         console.log(JSON.stringify({ ok: true, url: url.origin, layout, backend: 'all /api/plugins requests blocked; none made',
-            nativeGalleryImages: uploads.length, savedChats, novelai: ['JSON', 'ZIP', 'batch', 'encrypted vault', 'reload locks', 'read-only token test'],
+            nativeGalleryImages: uploads.length, savedChats, manualLlm: ['OpenAI-compatible endpoint', 'custom model', 'Bearer API key', 'connection test'],
+            novelai: ['JSON', 'ZIP', 'batch', 'encrypted vault', 'reload locks', 'read-only token test'],
             panel: ['direct browser API wiring (fixture)', 'short-lived bearer', 'presets/LoRA/overrides', '64-bit seed', 'retry reads only'],
             panelPreflights: panelCalls.filter(call => call.method === 'OPTIONS').length, panelSubmissions: panelSubmissions.length,
             requiredAssets, blockedSettingsWrites, pageErrors, initializationErrors }, null, 2));
     } finally {
         if (browser) await browser.close();
-        panel.closeAllConnections(); await new Promise(resolve => panel.close(resolve));
+        panel.closeAllConnections(); manualLlmServer.closeAllConnections();
+        await Promise.all([
+            new Promise(resolve => panel.close(resolve)),
+            new Promise(resolve => manualLlmServer.close(resolve)),
+        ]);
     }
 }
 

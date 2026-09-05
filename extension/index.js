@@ -3,8 +3,8 @@
  *
  * Adds a per-message "生成插圖" button. Clicking it:
  *   1. reads that message's text (plus optional history / character description),
- *   2. asks an LLM — through an independent Connection Manager profile, never the
- *      user's main chat preset — to turn it into an image prompt,
+ *   2. asks an LLM — through an independent Connection Manager profile or a
+ *      manually configured OpenAI-compatible API — to turn it into an image prompt,
  *   3. calls NovelAI directly in the browser, or submits/polls a job through the
  *      control panel's cookie-free browser API (no ST server plugin required),
  *   4. stores the resulting image(s) in SillyTavern and attaches them to that very
@@ -23,11 +23,13 @@ import { createPanelClient } from './panel.js';
 import { createNovelAI } from './novelai.js';
 import { encryptToken, decryptToken } from './token-vault.js';
 import { normalizeToken } from './http.js';
+import { createManualLlmClient, parseExtraHeaders } from './manual-llm.js';
 
 // Works for both a GitHub clone (extension/) and the flat install-ui deployment.
 const EXTENSION_FOLDER = new URL('.', import.meta.url).pathname
     .replace(/^\/scripts\/extensions\//, '').replace(/\/$/, '');
 const novelai = createNovelAI();
+const manualLlm = createManualLlmClient();
 let novelSessionToken = '', unlockedVaultFingerprint = '', novelSessionMode = '';
 let cachedPanel = null, cachedPanelKey = '';
 const BUTTON_CLASS = 'cmi_message_gen';
@@ -63,7 +65,15 @@ const defaultSettings = Object.freeze({
     panelPreset: '',
     usePresetPositive: true,
     usePresetNegative: true,
+    promptConnectionMode: 'profile',
     profileId: '',
+    manualLlmBaseUrl: 'https://api.openai.com/v1',
+    manualLlmPath: 'chat/completions',
+    manualLlmModel: '',
+    manualLlmApiKey: '',
+    manualLlmApiKeyHeader: 'Authorization',
+    manualLlmApiKeyPrefix: 'Bearer',
+    manualLlmExtraHeaders: '',
     maxTokens: 400,
     historyDepth: 2,
     systemPrompt: DEFAULT_SYSTEM_PROMPT,
@@ -126,7 +136,7 @@ function createImageClient(plan) {
 }
 
 // ---------------------------------------------------------------------------
-// Prompt generation (independent connection profile)
+// Prompt generation (independent profile or manual OpenAI-compatible API)
 // ---------------------------------------------------------------------------
 
 /**
@@ -224,7 +234,7 @@ function cleanPrompt(raw) {
 }
 
 /**
- * Ask the configured connection profile for an image prompt.
+ * Ask the configured profile or manual API for an image prompt.
  * @param {number} messageId
  * @param {object} message
  * @param {AbortSignal} signal
@@ -232,11 +242,14 @@ function cleanPrompt(raw) {
  */
 async function generatePrompt(messageId, message, signal, settings = getSettings()) {
     const context = SillyTavern.getContext();
-    if (!settings.profileId) {
-        throw new Error('尚未選擇提示詞生成用的連線設定檔（擴展設定 → 提示詞生成）。');
-    }
-    if (!listProfiles().some((p) => p.id === settings.profileId)) {
-        throw new Error('所選的連線設定檔已不存在或不受支援，請重新選擇。');
+    const connectionMode = settings.promptConnectionMode === 'manual' ? 'manual' : 'profile';
+    if (connectionMode === 'profile') {
+        if (!settings.profileId) {
+            throw new Error('尚未選擇提示詞生成用的連線設定檔（擴展設定 → 提示詞生成）。');
+        }
+        if (!listProfiles().some((p) => p.id === settings.profileId)) {
+            throw new Error('所選的連線設定檔已不存在或不受支援，請重新選擇。');
+        }
     }
 
     const values = {
@@ -252,12 +265,14 @@ async function generatePrompt(messageId, message, signal, settings = getSettings
     messages.push({ role: 'user', content: userPrompt });
 
     const maxTokens = Math.max(16, Number(settings.maxTokens) || defaultSettings.maxTokens);
-    const result = await context.ConnectionManagerRequestService.sendRequest(
-        settings.profileId,
-        messages,
-        maxTokens,
-        { stream: false, signal, extractData: true, includePreset: true, includeInstruct: true },
-    );
+    const result = connectionMode === 'manual'
+        ? await manualLlm.send(settings, messages, maxTokens, signal)
+        : await context.ConnectionManagerRequestService.sendRequest(
+            settings.profileId,
+            messages,
+            maxTokens,
+            { stream: false, signal, extractData: true, includePreset: true, includeInstruct: true },
+        );
 
     const content = typeof result === 'string' ? result : result?.content;
     const prompt = cleanPrompt(content);
@@ -635,6 +650,41 @@ function refreshProfileOptions() {
     $select.val(settings.profileId || '');
 }
 
+function showPromptConnectionSettings() {
+    const mode = getSettings().promptConnectionMode === 'manual' ? 'manual' : 'profile';
+    $('#cmi_settings [data-cmi-prompt-connection]').each(function () {
+        $(this).toggle($(this).attr('data-cmi-prompt-connection') === mode);
+    });
+}
+
+function validateManualHeaders() {
+    const text = String($('#cmi_manual_llm_extra_headers').val() || '');
+    try {
+        parseExtraHeaders(text);
+        setStatus('#cmi_manual_llm_headers_status', text.trim() ? 'Headers JSON 有效' : '', 'ok');
+        return true;
+    } catch (error) {
+        setStatus('#cmi_manual_llm_headers_status', String(error?.message || error), 'error');
+        return false;
+    }
+}
+
+async function testManualLlmConnection() {
+    setStatus('#cmi_manual_llm_status', '測試中…');
+    $('#cmi_manual_llm_test').prop('disabled', true);
+    try {
+        if (!validateManualHeaders()) return;
+        const result = await manualLlm.send(getSettings(), [
+            { role: 'user', content: 'Reply with exactly: OK' },
+        ], 8, new AbortController().signal);
+        setStatus('#cmi_manual_llm_status', `連線成功：${String(result).trim().slice(0, 80) || '收到空回應'}`, 'ok');
+    } catch (error) {
+        setStatus('#cmi_manual_llm_status', String(error?.message || error), 'error');
+    } finally {
+        $('#cmi_manual_llm_test').prop('disabled', false);
+    }
+}
+
 async function refreshPanelPresets({ silent = false } = {}) {
     const settings = getSettings();
     const $select = $('#cmi_panel_preset');
@@ -799,6 +849,16 @@ function loadSettingsIntoUi() {
     $('#cmi_password').val(settings.password);
     $('#cmi_use_preset_positive').prop('checked', !!settings.usePresetPositive);
     $('#cmi_use_preset_negative').prop('checked', !!settings.usePresetNegative);
+    $('#cmi_prompt_connection_mode').val(settings.promptConnectionMode === 'manual' ? 'manual' : 'profile');
+    $('#cmi_manual_llm_base_url').val(settings.manualLlmBaseUrl);
+    $('#cmi_manual_llm_path').val(settings.manualLlmPath);
+    $('#cmi_manual_llm_model').val(settings.manualLlmModel);
+    $('#cmi_manual_llm_api_key').val(settings.manualLlmApiKey);
+    $('#cmi_manual_llm_api_key_header').val(settings.manualLlmApiKeyHeader);
+    $('#cmi_manual_llm_api_key_prefix').val(settings.manualLlmApiKeyPrefix);
+    $('#cmi_manual_llm_extra_headers').val(settings.manualLlmExtraHeaders);
+    showPromptConnectionSettings();
+    validateManualHeaders();
     $('#cmi_max_tokens').val(settings.maxTokens);
     $('#cmi_history_depth').val(settings.historyDepth);
     $('#cmi_system_prompt').val(settings.systemPrompt);
@@ -856,6 +916,23 @@ function bindSettingsUi() {
     bindText('#cmi_password', 'password', (v) => String(v));
     bindCheckbox('#cmi_use_preset_positive', 'usePresetPositive');
     bindCheckbox('#cmi_use_preset_negative', 'usePresetNegative');
+    bindText('#cmi_prompt_connection_mode', 'promptConnectionMode', v => v === 'manual' ? 'manual' : 'profile');
+    $('#cmi_prompt_connection_mode').on('change', showPromptConnectionSettings);
+    bindText('#cmi_manual_llm_base_url', 'manualLlmBaseUrl', v => String(v).trim());
+    bindText('#cmi_manual_llm_path', 'manualLlmPath', v => String(v).trim());
+    bindText('#cmi_manual_llm_model', 'manualLlmModel', v => String(v).trim());
+    bindText('#cmi_manual_llm_api_key', 'manualLlmApiKey', v => String(v));
+    bindText('#cmi_manual_llm_api_key_header', 'manualLlmApiKeyHeader', v => String(v).trim());
+    bindText('#cmi_manual_llm_api_key_prefix', 'manualLlmApiKeyPrefix', v => String(v).trim());
+    bindText('#cmi_manual_llm_extra_headers', 'manualLlmExtraHeaders', v => String(v));
+    $('#cmi_manual_llm_extra_headers').on('input change', validateManualHeaders);
+    $('#cmi_manual_llm_test').on('click', testManualLlmConnection);
+    $('#cmi_manual_llm_api_key_toggle').on('click', function () {
+        const $input = $('#cmi_manual_llm_api_key');
+        const reveal = $input.attr('type') === 'password';
+        $input.attr('type', reveal ? 'text' : 'password');
+        $(this).toggleClass('fa-eye', !reveal).toggleClass('fa-eye-slash', reveal);
+    });
     bindText('#cmi_max_tokens', 'maxTokens', (v) => Math.max(16, Number(v) || defaultSettings.maxTokens));
     bindText('#cmi_history_depth', 'historyDepth', (v) => Math.max(0, Number(v) || 0));
     bindText('#cmi_system_prompt', 'systemPrompt', (v) => String(v));

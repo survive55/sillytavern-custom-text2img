@@ -3,11 +3,10 @@
     "loading_order": 100,
     "requires": [],
     "optional": [],
-    "dependencies": ["connection-manager"],
     "js": "index.js",
     "css": "style.css",
     "author": "st workspace",
-    "version": "3.0.2",
+    "version": "3.1.0",
     "homePage": "https://github.com/survive55/sillytavern-custom-text2img",
     "auto_update": false,
     "minimum_client_version": "1.14.0"

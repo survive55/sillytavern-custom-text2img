@@ -4,13 +4,13 @@
 
 **v3 是完整的網頁擴展：兩種模式都不需要另外安裝 ST 後端插件、不需要 npm、不需要修改 `config.yaml` 或重啟 ST。**
 
-- 使用獨立的 Connection Manager 設定檔生成圖片提示詞，不切換主聊天連線。
+- 圖片提示詞可使用獨立的 Connection Manager 設定檔，或手動配置 OpenAI 相容 API（Base URL、端點路徑、模型、API Key、驗證 Header、額外 Headers），不切換主聊天連線。
 - 保留提示詞審閱、前文／角色模板、負向提示詞、圖片參數、批次、Seed 和原樓層圖集。
 - NovelAI 由瀏覽器直接呼叫官方 API；ComfyUI／Modal 由瀏覽器直連現有控制面板的安全 API。
 
 ## 網頁安裝
 
-需要 **SillyTavern >= 1.14.0**、已啟用的內建 **Connection Manager** 與新版瀏覽器。
+需要 **SillyTavern >= 1.14.0** 與新版瀏覽器。只有選擇「Connection Manager 設定檔」作為提示詞 LLM 時才需要啟用內建 Connection Manager；手動 OpenAI 相容模式不需要它。
 
 v3.0.2 起支援 1.14.0；不需要升級到 1.18.0。圖片仍使用 1.14.0 起提供的原生 `message.extra.media` 圖集，因此 **不支援 1.13.x 或更舊版本**。從新版匯入、但目前 ST 不認識的連線供應商設定檔會略過，不會阻止本擴展的設定面板載入。
 
@@ -21,11 +21,24 @@ v3.0.2 起支援 1.14.0；不需要升級到 1.18.0。圖片仍使用 1.14.0 起
    ```
 
 2. 重新整理網頁。在 **SillyTavern Custom Text2Img** 設定中選擇生圖來源、填寫連線資訊。
-3. 啟用 ST 內建 **Connection Manager**，建立專門產生圖片提示詞的設定檔，在本擴展選取它。
+3. 在「提示詞生成」選擇其中一種：
+   - **Connection Manager 設定檔**：啟用 ST 內建 Connection Manager，建立專門產生圖片提示詞的設定檔並選取它。
+   - **手動 OpenAI 相容 API**：填入 Base URL、自訂 Chat Completions 路徑、模型與 API Key；需要時可改 API Key Header／前綴及額外 Headers。
 4. 點擊聊天樓層「⋯」中的魔杖按鈕。圖片會加入該樓層的原生圖集。
 
 不需要開啟 `enableServerPlugins`、`enableCorsProxy` 或 `allowKeysExposure`。
 GitHub 安裝下載的檔案已包含完整瀏覽器程式，不需要安裝後執行建置或從 CDN 下載程式。
+
+## 提示詞生成 LLM
+
+提示詞生成與主聊天連線完全獨立，可選：
+
+- **Connection Manager 設定檔**：沿用 ST 的 Chat Completion／Text Completion 設定檔、模型、預設與 instruct。
+- **手動 OpenAI 相容 API**：瀏覽器直接呼叫 Chat Completions 格式，可設定 Base URL、相對端點路徑（預設 `chat/completions`）、模型、API Key Header、API Key 前綴與額外 JSON Headers。請求包含 `model`、`messages`、`max_tokens`、`stream: false`，讀取 `choices[0].message.content`。
+
+例如 OpenAI 可填 Base URL `https://api.openai.com/v1`、端點 `chat/completions`、Header `Authorization`、前綴 `Bearer`。其他相容服務可依文件改成 `api-key`、空前綴或加入 `HTTP-Referer` 等 Headers。非本機 Base URL 強制使用 HTTPS，請求不攜帶 ST Cookie、CSRF Token 或瀏覽器憑證；服務本身仍須允許瀏覽器 CORS（包含 `Authorization`／自訂 Header 的 OPTIONS 預檢）。若 ST 是遠端 HTTPS 網站，而 LLM 是使用者裝置上的 HTTP localhost／私有網路服務，瀏覽器仍可能因 Mixed Content 或 Private Network Access 政策阻擋；建議讓 LLM 提供 HTTPS，或從同一台裝置的 localhost ST 使用。
+
+**手動模式的 API Key 會以明文保存在目前 ST 使用者的擴充設定，可能包含在設定匯出、備份或除錯資料中。** 請不要公開設定檔，並只在可信的 ST 網站及擴充環境使用。介面的「測試 LLM」會送出一個極短的實際 Chat Completions 請求，可能產生少量費用。
 
 ## NovelAI
 
