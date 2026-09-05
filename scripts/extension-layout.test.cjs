@@ -19,6 +19,7 @@ for (const { name, directory, prefix } of layouts) {
         const manifest = JSON.parse(fs.readFileSync(path.join(directory, 'manifest.json'), 'utf8'));
         assert.equal(manifest.display_name, 'SillyTavern Custom Text2Img');
         assert.equal(manifest.version, pkg.version);
+        assert.equal(manifest.minimum_client_version, '1.14.0', 'Both layouts must load on the native-media API baseline');
         assert.equal(manifest.js, `${prefix}index.js`);
         assert.equal(manifest.css, `${prefix}style.css`);
         assert.ok(manifest.author);

@@ -1,6 +1,6 @@
 {
     "name": "sillytavern-custom-text2img",
-    "version": "3.0.1",
+    "version": "3.0.2",
     "description": "Browser-only SillyTavern illustrations with ComfyUI/Modal and NovelAI; no extra ST server plugin required",
     "private": true,
     "license": "Apache-2.0",

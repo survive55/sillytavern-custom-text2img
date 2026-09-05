@@ -8,4 +8,4 @@
 - ComfyUI／Modal 直接呼叫已更新面板的 `/api/browser` API；仍保留預設、LoRA、覆寫參數、64-bit Seed 和任務輪詢。
 - NovelAI 未完成／未保存的結果可能在關閉或重整網頁時遺失；停止等待不代表退款。
 
-需要 SillyTavern >= 1.18.0、Connection Manager 與新版瀏覽器；Token 加密需 HTTPS／localhost。完整安裝、安全注意及遷移說明見 [專案 README](https://github.com/survive55/sillytavern-custom-text2img#readme)。
+需要 SillyTavern >= 1.14.0、已啟用的 Connection Manager 與新版瀏覽器（v3.0.2 起向後相容至 1.14.0；不支援 1.13.x 的舊圖片格式）；Token 加密需 HTTPS／localhost。完整安裝、安全注意及遷移說明見 [專案 README](https://github.com/survive55/sillytavern-custom-text2img#readme)。

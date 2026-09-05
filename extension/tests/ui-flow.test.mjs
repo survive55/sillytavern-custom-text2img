@@ -69,8 +69,8 @@ function fixture({ provider = 'novelai', configured = true, onSubmit = () => {},
     };
     vm.runInNewContext(`${source}\ngetSettings(); novelSessionToken = ${JSON.stringify(configured ? 'fake-novel-token' : '')};
         unlockedVaultFingerprint = JSON.stringify(getSettings().novelVault); novelSessionMode = 'memory';
-        globalThis.api = { onMessageButtonClick };`, sandbox, { filename: 'extension/index.js' });
-    return { run: () => sandbox.api.onMessageButtonClick(button), close: () => api.close(), context, message, settings, calls, saves, notifications, prompts, reviews,
+        globalThis.api = { onMessageButtonClick, listProfiles };`, sandbox, { filename: 'extension/index.js' });
+    return { run: () => sandbox.api.onMessageButtonClick(button), profiles: () => sandbox.api.listProfiles(), close: () => api.close(), context, message, settings, calls, saves, notifications, prompts, reviews,
         get savedChats() { return savedChats; }, get rendered() { return rendered; } };
 }
 
@@ -104,6 +104,16 @@ test('real panel flow preserves presets, LoRAs, 64-bit seed and frozen connectio
         assert.equal(call.init.credentials, 'omit'); assert.ok(!JSON.stringify(call).includes('fake-novel-token'));
         if (!call.url.endsWith('/login')) assert.ok(!JSON.stringify(call).includes('fake-panel-secret'));
     }
+});
+
+test('ST 1.14 profile checker errors only skip newer unsupported profiles', async t => {
+    const f = fixture(); t.after(f.close);
+    f.context.extensionSettings.connectionManager.profiles.push({ id: 'newer-provider' });
+    f.context.ConnectionManagerRequestService.isProfileSupported = profile => {
+        if (profile.id === 'newer-provider') throw new TypeError('Unknown provider in this ST release');
+        return profile.id === 'independent';
+    };
+    assert.deepEqual(f.profiles().map(profile => profile.id), ['independent']);
 });
 
 test('missing/locked NovelAI token fails before any LLM, generation or image save', async t => {

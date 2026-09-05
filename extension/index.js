@@ -135,7 +135,16 @@ function createImageClient(plan) {
 function listProfiles() {
     const context = SillyTavern.getContext();
     const profiles = context.extensionSettings?.connectionManager?.profiles ?? [];
-    return profiles.filter((profile) => context.ConnectionManagerRequestService.isProfileSupported(profile));
+    if (!Array.isArray(profiles)) return [];
+    return profiles.filter((profile) => {
+        // ST 1.14's checker can throw for a provider introduced in a newer ST
+        // release. One incompatible/imported profile must not break the UI.
+        try {
+            return context.ConnectionManagerRequestService?.isProfileSupported(profile) ?? false;
+        } catch {
+            return false;
+        }
+    });
 }
 
 /**
