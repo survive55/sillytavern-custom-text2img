@@ -4,21 +4,25 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import { generateWithPolling } from '../generation.js';
 import { PROVIDER_DEFAULTS, SETTINGS_KEY, migrateSettings, providerConnection, buildNovelPayload } from '../providers.js';
+import { createNovelAI } from '../novelai.js';
+import { createPanelClient } from '../panel.js';
+import { normalizeToken } from '../http.js';
+import { encryptToken, decryptToken } from '../token-vault.js';
+import { PNG_BASE64, PNG_BYTES, JOB_ID, panelLogin } from './fixtures.mjs';
 
-// Execute the actual message-button functions, replacing only browser/ST imports
-// and the startup DOM hook. No network, real credentials, chat files or paid APIs.
+// Run actual button functions and both real browser transports. Only DOM/ST and
+// external fetch are replaced; no server plugin, real secrets, chat writes or paid APIs.
 const source = fs.readFileSync(new URL('../index.js', import.meta.url), 'utf8')
     .replace(/^import .*;\r?\n/gm, '')
     .replaceAll('import.meta.url', JSON.stringify('http://127.0.0.1/scripts/extensions/third-party/sillytavern-custom-text2img/index.js'))
     .replace(/\ninit\(\)\.catch\([^\n]+\);\s*$/, '');
 assert.ok(!source.includes('init().catch'));
-const JOB = 'a'.repeat(32);
-const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=';
 
 function fixture({ provider = 'novelai', configured = true, onSubmit = () => {}, replyError = false, review = false } = {}) {
     const calls = [], saves = [], notifications = [], prompts = [], reviews = [];
     const settings = { ...PROVIDER_DEFAULTS, provider, enabled: true, profileId: 'independent', reviewPrompt: review,
-        baseUrl: 'https://panel.trycloudflare.com', password: 'fake-panel-secret', panelPreset: 'read-only', seed: '18446744073709551613' };
+        baseUrl: 'https://panel.trycloudflare.com', password: 'fake-panel-secret', panelPreset: 'read-only',
+        seed: '18446744073709551613', novelBatchSize: 2 };
     let savedChats = 0, rendered = 0;
     const message = { mes: 'A bright forest clearing at dawn.', name: 'Example', swipe_id: 0 };
     const context = {
@@ -34,101 +38,103 @@ function fixture({ provider = 'novelai', configured = true, onSubmit = () => {},
             sendRequest: async (...args) => { prompts.push(args); return 'landscape, sunrise'; },
         },
     };
+    const fakeFetch = async (url, init) => {
+        const body = init?.body ? JSON.parse(init.body) : {};
+        calls.push({ url, body, init });
+        if (url.endsWith('/api/browser/login')) return panelLogin();
+        if (url.endsWith('/presets/read-only')) return Response.json({ prompts: { positive: 'masterpiece', negative: 'blurry' }, loras: [{ name: 'test-lora' }] });
+        if (url.endsWith('/generate/jobs') || url.endsWith('/ai/generate-image')) {
+            onSubmit(context);
+            if (replyError) throw new TypeError('<b>lost upstream response</b>');
+            if (url.startsWith('https://image.novelai.net/')) return Response.json({ images: [{ image: PNG_BASE64, seed: 0 }, { image: PNG_BASE64, seed: 1 }] });
+            return Response.json({ job_id: JOB_ID, next_cursor: 1, finished: true,
+                events: [{ type: 'done', seed: '18446744073709551613', images: ['1/0.png', '1/1.png'] }] }, { status: 202 });
+        }
+        if (url.includes('/api/browser/output/')) return new Response(PNG_BYTES, { headers: { 'Content-Type': 'image/png' } });
+        assert.fail(`Unexpected UI request (ST plugin endpoints are forbidden): ${url}`);
+    };
+    const api = createNovelAI({ fetchImpl: fakeFetch, locks: null });
     const element = {};
     const button = { get: () => element, addClass() { return this; }, removeClass() { return this; }, closest: () => ({ attr: () => '0' }) };
     const toast = { find: () => ({ text() {} }) };
     const sandbox = {
         console, structuredClone, AbortController, AbortSignal, URL,
-        SillyTavern: { getContext: () => context },
-        $: () => ({ length: 1 }),
+        SillyTavern: { getContext: () => context }, $: () => ({ length: 1 }),
         toastr: Object.fromEntries(['info', 'warning', 'error', 'success', 'clear'].map(kind => [kind, (...args) => { notifications.push({ kind, args }); return toast; }])),
         MEDIA_DISPLAY: { GALLERY: 'gallery' }, MEDIA_SOURCE: { GENERATED: 'generated' }, MEDIA_TYPE: { IMAGE: 'image' }, SCROLL_BEHAVIOR: { KEEP: 'keep' },
-        PROVIDER_DEFAULTS, migrateSettings, providerConnection, buildNovelPayload, generateWithPolling,
+        PROVIDER_DEFAULTS, migrateSettings, providerConnection, buildNovelPayload, normalizeToken, encryptToken, decryptToken,
+        generateWithPolling: options => generateWithPolling({ ...options, delay: async signal => { await new Promise(resolve => setImmediate(resolve)); } }),
+        createNovelAI: () => api, createPanelClient: connection => createPanelClient(connection, { fetchImpl: fakeFetch }),
         saveBase64AsFile: async (...args) => { saves.push(args); return `/images/test-${saves.length}.png`; },
-        fetch: async (url, init) => {
-            const body = init?.body ? JSON.parse(init.body) : {};
-            calls.push({ url, body });
-            if (url.endsWith('/probe')) return Response.json({ ok: true, id: 'sillytavern-custom-text2img', providers: ['comfy-modal', 'novelai'] });
-            if (url.endsWith('/novelai/status')) return Response.json({ configured });
-            if (url.endsWith('/preset')) return Response.json({ prompts: { positive: 'masterpiece', negative: 'blurry' }, loras: [{ name: 'test-lora' }] });
-            if (url.endsWith('/jobs')) {
-                onSubmit(context);
-                if (replyError) return Response.json({ error: '<b>upstream failed</b>' }, { status: 502 });
-                return Response.json({ job_id: JOB, next_cursor: 1, finished: true,
-                    events: [{ type: 'done', seed: '0', images: [`${JOB}/0.png`, `${JOB}/1.png`] }] }, { status: 202 });
-            }
-            if (url.endsWith('/output')) return Response.json({ data: PNG, format: 'png', seed: body.path.endsWith('/0.png') ? '0' : '1' });
-            assert.fail(`Unexpected UI request: ${url}`);
-        },
     };
-    vm.runInNewContext(`${source}\nglobalThis.api = { onMessageButtonClick };`, sandbox, { filename: 'extension/index.js' });
-    return { run: () => sandbox.api.onMessageButtonClick(button), context, message, settings, calls, saves, notifications, prompts, reviews,
+    vm.runInNewContext(`${source}\ngetSettings(); novelSessionToken = ${JSON.stringify(configured ? 'fake-novel-token' : '')};
+        unlockedVaultFingerprint = JSON.stringify(getSettings().novelVault); novelSessionMode = 'memory';
+        globalThis.api = { onMessageButtonClick };`, sandbox, { filename: 'extension/index.js' });
+    return { run: () => sandbox.api.onMessageButtonClick(button), close: () => api.close(), context, message, settings, calls, saves, notifications, prompts, reviews,
         get savedChats() { return savedChats; }, get rendered() { return rendered; } };
 }
 
-test('real NovelAI button flow: independent prompt profile, multiple native gallery images, no panel credentials', async () => {
-    const f = fixture({ review: true });
+test('real NovelAI button flow: direct official API, independent profile, prompt review, multiple gallery images', async t => {
+    const f = fixture({ review: true }); t.after(f.close);
     await f.run();
-    assert.equal(f.prompts.length, 1);
-    assert.equal(f.prompts[0][0], 'independent');
-    assert.equal(f.prompts[0][3].includePreset, true);
-    assert.equal(f.saves.length, 2);
-    assert.equal(f.savedChats, 1);
-    assert.equal(f.rendered, 1);
+    assert.equal(f.prompts.length, 1); assert.equal(f.prompts[0][0], 'independent'); assert.equal(f.prompts[0][3].includePreset, true);
+    assert.equal(f.saves.length, 2); assert.equal(f.savedChats, 1); assert.equal(f.rendered, 1);
     assert.equal(f.message.extra.media.length, 2);
-    assert.equal(f.message.extra.media[0].seed, '0');
-    assert.equal(f.message.extra.media[1].seed, '1');
-    assert.equal(f.message.extra.media[0].source, 'generated');
-    assert.match(f.reviews[0], /NovelAI/);
+    assert.equal(f.message.extra.media[0].seed, '0'); assert.equal(f.message.extra.media[1].seed, '1');
+    assert.equal(f.message.extra.media[0].source, 'generated'); assert.match(f.reviews[0], /NovelAI/);
     assert.match(f.message.extra.media[0].title, /edited/);
     assert.ok(!JSON.stringify(f.calls).includes('fake-panel-secret'));
-    assert.ok(f.calls.every(call => call.url.endsWith('/probe') || call.url.includes('/novelai/')));
+    assert.ok(f.calls.every(call => call.url.startsWith('https://image.novelai.net/')));
     assert.equal(f.notifications.some(item => item.kind === 'error'), false);
 });
 
-test('real ComfyUI button flow preserves presets, LoRAs, string seed and original connection after switching settings', async () => {
+test('real panel flow preserves presets, LoRAs, 64-bit seed and frozen connection after switching settings', async t => {
     const f = fixture({ provider: 'comfy-modal', onSubmit(context) {
         const settings = context.extensionSettings[SETTINGS_KEY];
         settings.provider = 'novelai'; settings.password = 'changed'; settings.baseUrl = 'https://other.invalid';
-    } });
+    } }); t.after(f.close);
     await f.run();
     assert.equal(f.savedChats, 1);
-    const submitted = f.calls.find(call => call.url.endsWith('/jobs'));
-    assert.equal(submitted.body.payload.seed, '18446744073709551613');
-    assert.equal(submitted.body.payload.loras[0].name, 'test-lora');
-    assert.match(submitted.body.payload.prompt_text, /^masterpiece,/);
-    assert.equal(f.message.extra.media[0].negative, 'blurry');
-    for (const call of f.calls.filter(call => call.url.endsWith('/output'))) {
-        assert.equal(call.body.password, 'fake-panel-secret');
-        assert.equal(call.body.baseUrl, 'https://panel.trycloudflare.com');
-        assert.ok(!call.url.includes('/novelai/'));
+    const submitted = f.calls.find(call => call.url.endsWith('/generate/jobs'));
+    assert.equal(submitted.body.seed, '18446744073709551613'); assert.equal(submitted.body.loras[0].name, 'test-lora');
+    assert.match(submitted.body.prompt_text, /^masterpiece,/); assert.equal(f.message.extra.media[0].negative, 'blurry');
+    assert.equal(f.message.extra.media[0].seed, '18446744073709551613');
+    for (const call of f.calls) {
+        assert.ok(call.url.startsWith('https://panel.trycloudflare.com/api/browser/'));
+        assert.equal(call.init.credentials, 'omit'); assert.ok(!JSON.stringify(call).includes('fake-novel-token'));
+        if (!call.url.endsWith('/login')) assert.ok(!JSON.stringify(call).includes('fake-panel-secret'));
     }
 });
 
-test('missing NovelAI token fails before any LLM request, generation or image save', async () => {
-    const f = fixture({ configured: false });
+test('missing/locked NovelAI token fails before any LLM, generation or image save', async t => {
+    const f = fixture({ configured: false }); t.after(f.close);
     await f.run();
-    assert.equal(f.prompts.length, 0);
-    assert.equal(f.saves.length, 0);
-    assert.equal(f.savedChats, 0);
+    assert.equal(f.prompts.length, 0); assert.equal(f.saves.length, 0); assert.equal(f.savedChats, 0); assert.equal(f.calls.length, 0);
     assert.ok(f.notifications.some(item => item.kind === 'error' && item.args[0].includes('Token')));
 });
 
-test('a changed message is never replaced or attached to after generation', async () => {
-    const f = fixture({ onSubmit(context) { context.chat[0] = { mes: 'a different message' }; } });
+test('replacing account vault data locks the old in-memory token before generation', async t => {
+    const f = fixture(); t.after(f.close);
+    f.settings.novelVault = { ciphertext: 'another user or token' };
     await f.run();
-    assert.equal(f.saves.length, 2);
-    assert.equal(f.savedChats, 0);
-    assert.equal(f.context.chat[0].extra, undefined);
+    assert.equal(f.prompts.length, 0); assert.equal(f.calls.length, 0);
+});
+
+test('a changed message is never replaced or attached to after generation', async t => {
+    const f = fixture({ onSubmit(context) { context.chat[0] = { mes: 'a different message' }; } }); t.after(f.close);
+    await f.run();
+    assert.equal(f.saves.length, 2); assert.equal(f.savedChats, 0); assert.equal(f.context.chat[0].extra, undefined);
     assert.ok(f.notifications.some(item => item.kind === 'warning'));
 });
 
-test('a lost submit response is not retried and errors are rendered as text', async () => {
-    const f = fixture({ replyError: true });
-    await f.run();
-    assert.equal(f.calls.filter(call => call.url.endsWith('/jobs')).length, 1);
-    assert.equal(f.saves.length, 0);
-    const error = f.notifications.find(item => item.kind === 'error');
-    assert.equal(error.args[2].escapeHtml, true);
-    assert.match(error.args[0], /送出結果不明/);
-});
+for (const provider of ['novelai', 'comfy-modal']) {
+    test(`${provider}: a lost submit response is not retried and errors are rendered as text`, async t => {
+        const f = fixture({ provider, replyError: true }); t.after(f.close);
+        await f.run();
+        assert.equal(f.calls.filter(call => call.url.endsWith('/generate/jobs') || call.url.endsWith('/ai/generate-image')).length, 1);
+        assert.equal(f.saves.length, 0);
+        const error = f.notifications.find(item => item.kind === 'error');
+        assert.equal(error.args[2].escapeHtml, true); assert.doesNotMatch(error.args[0], /<b>/);
+        assert.match(error.args[0], provider === 'novelai' ? /不會自動重送/ : /送出結果不明/);
+    });
+}

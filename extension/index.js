@@ -5,8 +5,8 @@
  *   1. reads that message's text (plus optional history / character description),
  *   2. asks an LLM — through an independent Connection Manager profile, never the
  *      user's main chat preset — to turn it into an image prompt,
- *   3. submits a generation job to a local or Quick Tunnel control panel through
- *      `sillytavern-custom-text2img`, then polls progress with short JSON requests,
+ *   3. calls NovelAI directly in the browser, or submits/polls a job through the
+ *      control panel's cookie-free browser API (no ST server plugin required),
  *   4. stores the resulting image(s) in SillyTavern and attaches them to that very
  *      message via `message.extra.media` (native gallery rendering).
  *
@@ -19,11 +19,17 @@ import { saveBase64AsFile } from '/scripts/utils.js';
 import { MEDIA_DISPLAY, MEDIA_SOURCE, MEDIA_TYPE, SCROLL_BEHAVIOR } from '/scripts/constants.js';
 import { generateWithPolling } from './generation.js';
 import { PROVIDER_DEFAULTS, migrateSettings, providerConnection, buildNovelPayload } from './providers.js';
+import { createPanelClient } from './panel.js';
+import { createNovelAI } from './novelai.js';
+import { encryptToken, decryptToken } from './token-vault.js';
+import { normalizeToken } from './http.js';
 
 // Works for both a GitHub clone (extension/) and the flat install-ui deployment.
 const EXTENSION_FOLDER = new URL('.', import.meta.url).pathname
     .replace(/^\/scripts\/extensions\//, '').replace(/\/$/, '');
-const PLUGIN_BASE = '/api/plugins/sillytavern-custom-text2img';
+const novelai = createNovelAI();
+let novelSessionToken = '', unlockedVaultFingerprint = '', novelSessionMode = '';
+let cachedPanel = null, cachedPanelKey = '';
 const BUTTON_CLASS = 'cmi_message_gen';
 const BUSY_CLASS = 'cmi_busy';
 const LOG_PREFIX = '[SillyTavernCustomText2Img]';
@@ -91,59 +97,32 @@ function saveSettings() {
 }
 
 // ---------------------------------------------------------------------------
-// Plugin (server-side proxy) calls
+// Direct browser clients; credentials never cross provider boundaries.
 // ---------------------------------------------------------------------------
 
-/**
- * @param {string} path
- * @param {object} body
- * @param {AbortSignal | null} [signal]
- * @returns {Promise<any>}
- */
-async function pluginPost(path, body, signal = null) {
-    const { getRequestHeaders } = SillyTavern.getContext();
-    const response = await fetch(`${PLUGIN_BASE}${path}`, {
-        method: 'POST',
-        headers: getRequestHeaders(),
-        body: JSON.stringify(body),
-        signal,
-    });
-    if (!response.ok) {
-        throw Object.assign(new Error(await readErrorMessage(response)), { status: response.status });
+function getPanelClient(connection = getSettings()) {
+    const key = JSON.stringify([connection.baseUrl, connection.password]);
+    if (!cachedPanel || key !== cachedPanelKey) {
+        cachedPanel = createPanelClient({ baseUrl: connection.baseUrl, password: connection.password });
+        cachedPanelKey = key;
     }
-    return response.json();
+    return cachedPanel;
 }
 
-/**
- * @param {Response} response
- * @returns {Promise<string>}
- */
-async function readErrorMessage(response) {
-    const text = await response.text().catch(() => '');
-    try {
-        const data = JSON.parse(text);
-        if (data?.error) return String(data.error);
-    } catch { /* not JSON */ }
-    if (response.status === 404) {
-        return '伺服器插件 sillytavern-custom-text2img 未載入（HTTP 404）。請啟用 enableServerPlugins 並重新啟動 SillyTavern。';
-    }
-    return text || `HTTP ${response.status}`;
+function clearUnlockedToken() {
+    novelSessionToken = '';
+    unlockedVaultFingerprint = '';
+    novelSessionMode = '';
 }
 
-async function isPluginAvailable() {
-    try {
-        const response = await fetch(`${PLUGIN_BASE}/probe`, { cache: 'no-cache' });
-        if (!response.ok) return false;
-        const data = await response.json();
-        return data?.ok === true && data.id === 'sillytavern-custom-text2img'
-            && data.providers?.includes('comfy-modal') && data.providers?.includes('novelai');
-    } catch {
-        return false;
-    }
+function unlockedToken() {
+    if (unlockedVaultFingerprint !== JSON.stringify(getSettings().novelVault)) clearUnlockedToken();
+    if (!novelSessionToken) throw new Error('請先儲存並解鎖 NovelAI Token，或選擇「僅本次使用」。');
+    return novelSessionToken;
 }
 
-function credentials(settings = getSettings()) {
-    return { baseUrl: settings.baseUrl.trim(), password: settings.password };
+function createImageClient(plan) {
+    return plan.provider === 'novelai' ? novelai.client(unlockedToken()) : getPanelClient(plan.connection);
 }
 
 // ---------------------------------------------------------------------------
@@ -369,14 +348,14 @@ function buildGeneratePayload(prompt, preset, settings = getSettings()) {
  * @param {AbortSignal} signal
  * @returns {Promise<object | null>}
  */
-async function loadSelectedPreset(signal, settings = getSettings()) {
+async function loadSelectedPreset(signal, settings = getSettings(), client = getPanelClient(settings)) {
     const name = String(settings.panelPreset ?? '').trim();
     if (!name) return null;
-    return pluginPost('/preset', { ...credentials(settings), name }, signal);
+    return client.preset(name, signal);
 }
 
 // ---------------------------------------------------------------------------
-// Tunnel-safe generation jobs through the same-origin proxy
+// Tunnel-safe panel jobs and page-owned NovelAI jobs
 // ---------------------------------------------------------------------------
 
 /**
@@ -385,12 +364,11 @@ async function loadSelectedPreset(signal, settings = getSettings()) {
  * @param {(event: any) => void} onEvent
  * @returns {Promise<{ images: string[], seed: string | null, generationId: number | null }>}
  */
-async function generateImages(payload, signal, onEvent, plan) {
-    // The same frozen provider/connection is used for submit, polling AND output.
-    const { prefix, connection } = plan;
+async function generateImages(payload, signal, onEvent, client) {
+    // This same frozen client is used for submit, polling AND image retrieval.
     return generateWithPolling({
-        submit: (requestSignal) => pluginPost(`${prefix}/jobs`, { ...connection, payload }, requestSignal),
-        poll: (jobId, after, requestSignal) => pluginPost(`${prefix}/job`, { ...connection, jobId, after }, requestSignal),
+        submit: (requestSignal) => client.submit(payload, requestSignal),
+        poll: (jobId, after, requestSignal) => client.poll(jobId, after, requestSignal),
         onEvent,
         signal,
     });
@@ -493,12 +471,8 @@ async function onMessageButtonClick($button) {
     const toast = createProgressToast(title, () => controller.abort('Aborted by user'));
 
     try {
-        if (!(await isPluginAvailable())) {
-            throw new Error('伺服器插件 sillytavern-custom-text2img 未載入或版本過舊。請啟用 enableServerPlugins 並重新啟動 SillyTavern。');
-        }
-        if (novel && !(await pluginPost('/novelai/status', {}, signal)).configured) {
-            throw new Error('請先在 NovelAI 設定儲存 Persistent API Token。');
-        }
+        const client = createImageClient(plan);
+        await client.prepare(signal);
         signal.throwIfAborted();
         toast.update('正在請 AI 撰寫圖片提示詞…');
         let prompt = await generatePrompt(messageId, message, signal, settings);
@@ -514,13 +488,13 @@ async function onMessageButtonClick($button) {
             payload = buildNovelPayload(prompt, settings);
         } else {
             toast.update('讀取面板預設組合…');
-            payload = buildGeneratePayload(prompt, await loadSelectedPreset(signal, settings), settings);
+            payload = buildGeneratePayload(prompt, await loadSelectedPreset(signal, settings, client), settings);
         }
         toast.update('送出產圖請求…');
         const result = await generateImages(payload, signal, (event) => {
             const text = describeEvent(event);
             if (text) toast.update(text);
-        }, plan);
+        }, client);
         if (!result.images.length) throw new Error('圖片伺服器沒有回傳任何圖片。');
 
         toast.update(`下載 ${result.images.length} 張圖片…`);
@@ -528,7 +502,7 @@ async function onMessageButtonClick($button) {
         const seeds = [];
         for (const path of result.images) {
             signal.throwIfAborted();
-            const file = await pluginPost(`${plan.prefix}/output`, { ...plan.connection, path }, signal);
+            const file = await client.output(path, signal);
             const filename = `${characterName}_${context.humanizedDateTime()}_${saved.length}`;
             const url = await saveBase64AsFile(file.data, characterName, filename, file.format || 'png');
             saved.push(url);
@@ -549,7 +523,7 @@ async function onMessageButtonClick($button) {
     } catch (error) {
         if (signal.aborted) {
             toastr.info(novel
-                ? '已停止等待。NovelAI 已提交的生圖可能仍會扣點；結果只暫存於 ST，勿立即重複生成。'
+                ? '已停止等待。NovelAI 仍可能扣點；目前分頁仍會接收結果，關閉或重整會遺失未保存圖片，勿立即重複生成。'
                 : '已停止等待。已提交的生圖仍會繼續，可在圖片控制面板歷史紀錄取回。', title);
         } else {
             toastr.error(String(error?.message || error), `${title} 生成失敗`, { timeOut: 10000, escapeHtml: true });
@@ -657,7 +631,7 @@ async function refreshPanelPresets({ silent = false } = {}) {
     const $select = $('#cmi_panel_preset');
     const current = settings.panelPreset || '';
     try {
-        const data = await pluginPost('/presets', credentials());
+        const data = await getPanelClient().presets();
         const presets = Array.isArray(data?.presets) ? data.presets : [];
         $select.empty().append('<option value="">（不使用，採 workflow 預設值）</option>');
         for (const preset of presets) {
@@ -680,14 +654,8 @@ async function refreshPanelPresets({ silent = false } = {}) {
 async function onTestConnection() {
     setStatus('#cmi_connection_status', '測試中…');
     try {
-        if (!(await isPluginAvailable())) {
-            throw new Error('伺服器插件 sillytavern-custom-text2img 未載入');
-        }
-        const data = await pluginPost('/test', credentials());
-        if (data.generation_transport !== 'poll') {
-            throw new Error('登入成功，但圖片伺服器或代理尚未更新為任務 API；請更新並重新載入 ui_server.py 與 sillytavern-custom-text2img。');
-        }
-        setStatus('#cmi_connection_status', `連線成功（${data.baseUrl}，HTTP 輪詢／Quick Tunnel 可用，佇列等待 ${data.waiting}）`, 'ok');
+        const data = await getPanelClient().test();
+        setStatus('#cmi_connection_status', `瀏覽器直連成功（${data.baseUrl}，HTTP 輪詢／Quick Tunnel 可用，佇列等待 ${data.waiting}）`, 'ok');
         await refreshPanelPresets({ silent: true });
     } catch (error) {
         setStatus('#cmi_connection_status', String(error?.message || error), 'error');
@@ -710,17 +678,29 @@ function showProviderSettings() {
     });
 }
 
-async function refreshNovelStatus() {
-    try {
-        const data = await pluginPost('/novelai/status', {});
-        $('#cmi_novel_token').attr('placeholder', data.configured ? '已儲存；貼上新 Token 可更換' : '貼上 Token，再按儲存');
-        setStatus('#cmi_novel_status', data.configured ? 'Token 已儲存於 ST 使用者 secrets（尚未測試連線）。' : '尚未儲存 Token。', data.configured ? 'ok' : '');
-    } catch (error) {
-        setStatus('#cmi_novel_status', String(error?.message || error), 'error');
-    }
+function refreshNovelStatus() {
+    const configured = Boolean(getSettings().novelVault);
+    let unlocked = false;
+    try { unlocked = Boolean(unlockedToken()); } catch { /* locked by default */ }
+    $('#cmi_novel_token').attr('placeholder', configured ? '已加密儲存；更換時貼上新 Token' : '貼上 Token，再選擇保存方式');
+    const text = unlocked
+        ? novelSessionMode === 'memory' ? 'Token 僅在目前分頁記憶體中；關閉／重整後需重新輸入。'
+            : 'Token 已解鎖；只有加密資料隨 ST 使用者設定保存，密語不保存。'
+        : configured ? 'Token 已加密儲存且鎖定，請輸入密語後按「解鎖」。'
+            : '尚未儲存 Token。舊版 ST 後端 Token 不會被自動讀取，請重新貼上一次。';
+    setStatus('#cmi_novel_status', text, unlocked ? 'ok' : '');
+}
+
+function rememberUnlockedToken(token, mode) {
+    novelSessionToken = normalizeToken(token);
+    unlockedVaultFingerprint = JSON.stringify(getSettings().novelVault);
+    novelSessionMode = mode;
+    $('#cmi_novel_token, #cmi_novel_passphrase').val('');
+    refreshNovelStatus();
 }
 
 async function saveNovelToken(clear = false) {
+    const settings = getSettings();
     const token = String($('#cmi_novel_token').val() || '').trim();
     if (!clear && !token) {
         setStatus('#cmi_novel_status', '請先貼上 Persistent API Token。', 'error');
@@ -728,14 +708,20 @@ async function saveNovelToken(clear = false) {
     }
     if (clear) {
         const { callGenericPopup, POPUP_TYPE } = SillyTavern.getContext();
-        if (!(await callGenericPopup('刪除此插件的 NovelAI Token？不影響主連線或已提交的任務。', POPUP_TYPE.CONFIRM))) return;
+        if (!(await callGenericPopup('刪除此插件的加密 NovelAI Token？不影響 ST 主連線、舊版 secrets 或已提交的任務。', POPUP_TYPE.CONFIRM))) return;
     }
-    const buttons = $('#cmi_novel_save_token, #cmi_novel_clear_token, #cmi_novel_test');
+    const buttons = $('#cmi_settings .cmi-token-actions button');
     buttons.prop('disabled', true);
     try {
-        await pluginPost('/novelai/token', clear ? { clear: true } : { token });
-        $('#cmi_novel_token').val('');
-        await refreshNovelStatus();
+        const record = clear ? null : await encryptToken(token, String($('#cmi_novel_passphrase').val() || ''));
+        if (getSettings() !== settings) throw new Error('使用者設定已變更，請重新操作。');
+        settings.novelVault = record;
+        saveSettings();
+        if (clear) {
+            clearUnlockedToken();
+            $('#cmi_novel_token, #cmi_novel_passphrase').val('');
+            refreshNovelStatus();
+        } else rememberUnlockedToken(token, 'vault');
     } catch (error) {
         setStatus('#cmi_novel_status', String(error?.message || error), 'error');
     } finally {
@@ -743,15 +729,39 @@ async function saveNovelToken(clear = false) {
     }
 }
 
-async function testNovelConnection() {
-    if (String($('#cmi_novel_token').val() || '').trim()) {
-        setStatus('#cmi_novel_status', '輸入框有尚未儲存的 Token，請先按「儲存 Token」。', 'error');
+async function unlockNovelToken() {
+    const settings = getSettings(), record = settings.novelVault;
+    if (!record) {
+        setStatus('#cmi_novel_status', '尚未加密儲存 Token。', 'error');
         return;
     }
-    setStatus('#cmi_novel_status', '測試 NovelAI 標籤 API 中（不生圖）…');
+    const buttons = $('#cmi_settings .cmi-token-actions button');
+    buttons.prop('disabled', true);
+    try {
+        const token = await decryptToken(record, String($('#cmi_novel_passphrase').val() || ''));
+        if (getSettings() !== settings || settings.novelVault !== record) throw new Error('Token 設定已變更，請重新解鎖。');
+        rememberUnlockedToken(token, 'vault');
+    } catch (error) {
+        setStatus('#cmi_novel_status', String(error?.message || error), 'error');
+    } finally {
+        buttons.prop('disabled', false);
+    }
+}
+
+function useNovelTokenForSession() {
+    try { rememberUnlockedToken(String($('#cmi_novel_token').val() || ''), 'memory'); }
+    catch (error) { setStatus('#cmi_novel_status', String(error?.message || error), 'error'); }
+}
+
+async function testNovelConnection() {
+    if (String($('#cmi_novel_token').val() || '').trim()) {
+        setStatus('#cmi_novel_status', '輸入框有尚未套用的 Token，請先選擇「加密儲存」或「僅本次使用」。', 'error');
+        return;
+    }
+    setStatus('#cmi_novel_status', '測試 NovelAI 瀏覽器直連（標籤 API，不生圖）…');
     $('#cmi_novel_test').prop('disabled', true);
     try {
-        const result = await pluginPost('/novelai/test', {});
+        const result = await novelai.client(unlockedToken()).test();
         setStatus('#cmi_novel_status', result.message, 'ok');
     } catch (error) {
         setStatus('#cmi_novel_status', String(error?.message || error), 'error');
@@ -823,6 +833,13 @@ function bindSettingsUi() {
     });
     $('#cmi_novel_save_token').on('click', () => saveNovelToken());
     $('#cmi_novel_clear_token').on('click', () => saveNovelToken(true));
+    $('#cmi_novel_unlock').on('click', unlockNovelToken);
+    $('#cmi_novel_session').on('click', useNovelTokenForSession);
+    $('#cmi_novel_lock').on('click', () => {
+        clearUnlockedToken();
+        $('#cmi_novel_token, #cmi_novel_passphrase').val('');
+        refreshNovelStatus();
+    });
     $('#cmi_novel_test').on('click', testNovelConnection);
     bindCheckbox('#cmi_enabled', 'enabled');
     $('#cmi_enabled').on('change', ensureMessageButtons);
@@ -893,7 +910,6 @@ async function init() {
     const { eventSource, event_types } = context;
     eventSource.on(event_types.APP_READY, () => {
         ensureMessageButtons();
-        isPluginAvailable().then((ok) => $('#cmi_plugin_warning').toggle(!ok));
         const settings = getSettings();
         if (settings.provider === 'comfy-modal' && settings.baseUrl && settings.password) {
             refreshPanelPresets({ silent: true });
@@ -905,9 +921,17 @@ async function init() {
     eventSource.on(event_types.USER_MESSAGE_RENDERED, ensureMessageButtons);
     eventSource.on(event_types.MESSAGE_SWIPED, ensureMessageButtons);
     eventSource.on(event_types.CONNECTION_PROFILE_LOADED, refreshProfileOptions);
-    eventSource.on(event_types.SETTINGS_UPDATED, refreshProfileOptions);
+    eventSource.on(event_types.SETTINGS_UPDATED, () => {
+        refreshProfileOptions();
+        if (getSettings().provider === 'novelai') refreshNovelStatus();
+    });
+    window.addEventListener('beforeunload', (event) => {
+        if (!novelai.busy) return;
+        event.preventDefault();
+        event.returnValue = '';
+    });
 
-    console.log(LOG_PREFIX, 'initialized');
+    console.log(LOG_PREFIX, 'initialized (browser-only providers)');
 }
 
 init().catch((error) => console.error(LOG_PREFIX, 'initialization failed', error));

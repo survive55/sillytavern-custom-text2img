@@ -14,6 +14,8 @@ export const PROVIDER_DEFAULTS = Object.freeze({
     novelBatchSize: 1,
     novelSeed: '',
     novelNegativePrompt: '',
+    // Authenticated ciphertext only; plaintext tokens and unlock phrases never belong here.
+    novelVault: null,
 });
 
 export function migrateSettings(container, defaults) {
@@ -44,9 +46,9 @@ export function migrateSettings(container, defaults) {
 }
 
 export function providerConnection(settings) {
-    if (settings.provider === 'novelai') return { prefix: '/novelai', connection: {} };
+    if (settings.provider === 'novelai') return { provider: 'novelai' };
     if (settings.provider !== 'comfy-modal') throw new Error('不支援的生圖來源');
-    return { prefix: '', connection: { baseUrl: String(settings.baseUrl ?? '').trim(), password: settings.password } };
+    return { provider: 'comfy-modal', connection: { baseUrl: String(settings.baseUrl ?? '').trim(), password: settings.password } };
 }
 
 export function buildNovelPayload(prompt, settings) {

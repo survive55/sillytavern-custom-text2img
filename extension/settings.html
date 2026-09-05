@@ -5,10 +5,7 @@
             <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
         </div>
         <div class="inline-drawer-content">
-            <div id="cmi_plugin_warning" class="cmi-warning" style="display: none;">
-                <i class="fa-solid fa-triangle-exclamation"></i>
-                <span>生圖後端未載入。網頁「安裝擴展」只安裝前端；請另將本專案安裝到 <code>plugins/sillytavern-custom-text2img</code>、安裝依賴，並在 <code>config.yaml</code> 設定 <code>enableServerPlugins: true</code> 後重新啟動 SillyTavern。詳見專案 README。</span>
-            </div>
+            <small id="cmi_install_mode" class="cmi-hint">純網頁版：NovelAI 由瀏覽器直連官方 API；ComfyUI／Modal 直連已更新的控制面板。兩者皆不需要 ST 後端插件、npm 安裝或修改 ST 設定。</small>
             <label class="checkbox_label" for="cmi_enabled">
                 <input id="cmi_enabled" type="checkbox" />
                 <span>啟用（在每個樓層顯示「生成插圖」按鈕）</span>
@@ -28,7 +25,7 @@
                 <div class="inline-drawer-content">
                     <label for="cmi_base_url">Base URL（ComfyUI on Modal 控制面板的網址）</label>
                     <input id="cmi_base_url" class="text_pole" type="text" placeholder="https://example.trycloudflare.com" />
-                    <small class="cmi-hint">可填控制面板的 Quick Tunnel 網址；與 ST 同機時也可填 <code>http://127.0.0.1:8800</code>。由 ST 伺服器登入並以短 HTTP 請求查詢任務，不依賴 SSE。不要填 SillyTavern 網址或 Modal 原生 ComfyUI 網址。</small>
+                    <small class="cmi-hint">填控制面板的 HTTPS／Quick Tunnel 網址；只有瀏覽器與面板同機時才可填 <code>http://127.0.0.1:8800</code>。瀏覽器以短效 Token 登入及輪詢，不依賴跨站 Cookie 或 SSE。面板需提供 <code>/api/browser</code>；不要填 ST 網址或 Modal 原生 ComfyUI 網址。</small>
                     <label for="cmi_password">登入密碼（UI_SHARED_PASSWORD / UI_USERS 其中一個密碼）</label>
                     <div class="flex-container alignItemsCenter">
                         <input id="cmi_password" class="text_pole flex1" type="password" autocomplete="off" placeholder="password" />
@@ -54,14 +51,19 @@
                 <b><i class="fa-solid fa-cloud"></i> NovelAI 官方圖片 API</b>
                 <small class="cmi-hint">固定使用 <code>https://image.novelai.net/ai/generate-image</code>，不需要 ComfyUI、Modal 網址或密碼。</small>
                 <label for="cmi_novel_token">Persistent API Token</label>
-                <input id="cmi_novel_token" class="text_pole" type="password" autocomplete="new-password" placeholder="貼上 Token，再按儲存" />
+                <input id="cmi_novel_token" class="text_pole" type="password" autocomplete="new-password" placeholder="貼上 Token，再選擇保存方式" />
+                <label for="cmi_novel_passphrase">獨立解鎖密語（至少 12 字元；不保存，不是 NovelAI 帳號密碼）</label>
+                <input id="cmi_novel_passphrase" class="text_pole" type="password" autocomplete="off" placeholder="加密儲存／解鎖時使用" />
                 <div class="flex-container flexGap5 cmi-token-actions">
-                    <button id="cmi_novel_save_token" class="menu_button" type="button">儲存 Token</button>
+                    <button id="cmi_novel_save_token" class="menu_button" type="button">加密儲存 Token</button>
+                    <button id="cmi_novel_unlock" class="menu_button" type="button">解鎖</button>
+                    <button id="cmi_novel_lock" class="menu_button" type="button">鎖定</button>
+                    <button id="cmi_novel_session" class="menu_button" type="button">僅本次使用</button>
                     <button id="cmi_novel_clear_token" class="menu_button" type="button">刪除 Token</button>
                     <button id="cmi_novel_test" class="menu_button" type="button">測試 Token（不生圖）</button>
                 </div>
                 <small id="cmi_novel_status" class="cmi-status" aria-live="polite"></small>
-                <small class="cmi-hint">從 NovelAI 帳號設定取得 Persistent API Token，不要填帳號密碼。Token 僅儲存於 ST 當前使用者的 secrets 儲存區（ST 原生磁碟格式並非加密）；不放入插件設定，也不覆蓋主連線的 NovelAI Token。</small>
+                <small class="cmi-hint">從 NovelAI 帳號設定取得 Persistent API Token。AES-GCM 加密資料隨目前 ST 使用者設定保存，解鎖密語不保存；重整後需重新解鎖。也可只放在目前分頁記憶體，不留下 Token 設定。加密需 HTTPS 或 localhost；不讀取／覆蓋 ST 主連線或舊版 secrets，舊版使用者需重新貼上一次。請只安裝可信擴展，解鎖中的 Token 必須供瀏覽器使用。</small>
                 <label for="cmi_novel_model">模型</label>
                 <select id="cmi_novel_model" class="text_pole">
                     <option value="nai-diffusion-4-5-full">NAI Diffusion Anime V4.5 Full</option>
@@ -95,7 +97,7 @@
                 <label for="cmi_novel_negative">NovelAI 負向提示詞</label>
                 <textarea id="cmi_novel_negative" class="text_pole textarea_compact" rows="3"></textarea>
                 <small class="cmi-hint">插件限制：寬高為 64 的倍數、每張最多 3145728 像素、每次總計最多 4194304 像素。不自動添加品質或負向標籤。實際模型權限、可用參數與扣點依 NovelAI 帳號為準。</small>
-                <div class="cmi-warning">生圖可能消耗 Anlas，批次數大於 1 亦可能收費。僅在你點擊樓層按鈕時送出，失敗不自動重送；停止等待不代表取消扣點。結果在 ST 記憶體暫存 30 分鐘，重啟即消失。</div>
+                <div class="cmi-warning">生圖可能消耗 Anlas，批次數大於 1 亦可能收費。僅在你點擊樓層按鈕時送出，失敗不自動重送；停止等待或鎖定 Token 不代表取消扣點。結果只在目前分頁暫存 30 分鐘；關閉／重整頁面可能遺失尚未保存的圖片，請等候存入聊天後再離開。</div>
             </div>
 
             <div class="inline-drawer cmi-section">

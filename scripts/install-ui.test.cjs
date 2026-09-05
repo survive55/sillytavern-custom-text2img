@@ -10,10 +10,6 @@ function fixture(t) {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'custom-text2img-install-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ name: 'sillytavern' }));
-    const server = path.join(root, 'plugins', ID);
-    fs.mkdirSync(server, { recursive: true });
-    fs.writeFileSync(path.join(server, 'index.js'), '// fixture');
-    fs.copyFileSync(path.join(__dirname, '../package.json'), path.join(server, 'package.json'));
     const user = path.join(root, 'data/default-user');
     fs.mkdirSync(path.join(user, 'extensions'), { recursive: true });
     return { root, user, target: path.join(user, 'extensions', ID), legacy: path.join(user, 'extensions', LEGACY_ID) };
@@ -29,6 +25,13 @@ test('installs only runtime files, uses one source of truth and is idempotent', 
     assert.equal(installUi({ root }).changed, false);
     assert.equal(installUi({ root, check: true }).changed, false);
     assert.equal(fs.existsSync(path.join(root, 'config.yaml')), false);
+    assert.equal(fs.existsSync(path.join(root, 'plugins')), false, 'UI installation must not require or install a server plugin');
+    for (const file of RUNTIME_FILES.filter(name => name.endsWith('.js'))) {
+        const text = fs.readFileSync(path.join(target, file), 'utf8');
+        for (const match of text.matchAll(/^import .* from ['"]\.\/([^'"]+)['"];$/gm)) {
+            assert.ok(RUNTIME_FILES.includes(match[1]), `Missing runtime import ${match[1]}`);
+        }
+    }
 });
 
 test('migration backs up both previous deployment and legacy UI; user data is untouched', (t) => {

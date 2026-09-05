@@ -6,7 +6,7 @@ const crypto = require('node:crypto');
 
 const ID = 'sillytavern-custom-text2img';
 const LEGACY_ID = 'st-comfy-modal-illustrator';
-const RUNTIME_FILES = Object.freeze(['index.js', 'generation.js', 'providers.js', 'settings.html', 'style.css', 'package.json', 'README.md', 'manifest.json']);
+const RUNTIME_FILES = Object.freeze(['index.js', 'generation.js', 'providers.js', 'http.js', 'panel.js', 'novelai.js', 'novelai-payload.js', 'images.js', 'token-vault.js', 'settings.html', 'style.css', 'package.json', 'README.md', 'manifest.json']);
 
 function plainDirectory(location) {
     if (!fs.existsSync(location)) return;
@@ -21,11 +21,8 @@ function installUi({ root = path.resolve(__dirname, '../../..'), user = 'default
     if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(user)) throw new Error('user 必須是單一合法使用者目錄名稱。');
     const host = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
     if (host.name !== 'sillytavern') throw new Error('指定目錄不是 SillyTavern 根目錄。');
-    const serverRoot = path.join(root, 'plugins', ID);
-    if (!fs.existsSync(path.join(serverRoot, 'index.js'))) throw new Error(`請先把完整專案放入 ${serverRoot}`);
     const manifest = JSON.parse(fs.readFileSync(path.join(source, 'manifest.json'), 'utf8'));
-    const serverPackage = JSON.parse(fs.readFileSync(path.join(serverRoot, 'package.json'), 'utf8'));
-    if (serverPackage.name !== ID || serverPackage.version !== manifest.version) throw new Error('前後端版本不一致，請使用同一份專案。');
+    if (manifest.js !== 'index.js' || manifest.css !== 'style.css') throw new Error('來源不是完整的獨立前端目錄。');
     const userRoot = path.join(path.resolve(dataRoot || path.join(root, 'data')), user);
     plainDirectory(userRoot);
     if (!fs.existsSync(userRoot)) throw new Error(`使用者不存在：${userRoot}（自訂 dataRoot 請加 --data-root）`);
@@ -105,7 +102,7 @@ if (require.main === module) {
         const options = parseArgs(process.argv.slice(2));
         if (options.help) {
             console.log('node scripts/install-ui.cjs [--sillytavern /path/to/ST] [--data-root /path/to/data] [--user default-user] [--migrate] [--check]');
-            console.log('先將專案放在 ST/plugins/sillytavern-custom-text2img。安裝不修改設定或重啟服務；--check 僅比對（不同時 exit 1）。');
+            console.log('可從任意專案 clone 同步前端；不需要 ST 後端插件。安裝不修改設定或重啟服務；--check 僅比對（不同時 exit 1）。');
         } else {
             const result = installUi(options);
             console.log(JSON.stringify(result, null, 2));

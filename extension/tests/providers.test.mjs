@@ -39,7 +39,7 @@ test('fresh settings and malformed old settings receive independent defaults', (
 test('NovelAI never receives a panel URL, password, workflow overrides or ComfyUI seed', () => {
     const settings = { ...defaults, provider: 'novelai', baseUrl: 'https://private.invalid', password: 'private-password', seed: '18446744073709551613', advancedOverrides: '{"loras":["private"]}', novelSeed: '0' };
     const connection = providerConnection(settings);
-    assert.deepEqual(connection, { prefix: '/novelai', connection: {} });
+    assert.deepEqual(connection, { provider: 'novelai' });
     const request = buildNovelPayload('landscape', settings);
     assert.equal(request.seed, '0');
     assert.equal(request.width, 1024);
@@ -55,7 +55,7 @@ test('a chosen connection is frozen independently of later source changes, numer
     settings.provider = 'novelai';
     settings.baseUrl = 'https://another.invalid';
     settings.password = 'changed';
-    assert.deepEqual(plan, { prefix: '', connection: { baseUrl: 'https://panel.trycloudflare.com/', password: 'fake-password' } });
+    assert.deepEqual(plan, { provider: 'comfy-modal', connection: { baseUrl: 'https://panel.trycloudflare.com/', password: 'fake-password' } });
     assert.equal(buildNovelPayload('landscape', settings).scale, 0);
     assert.equal(buildNovelPayload('landscape', settings).steps, 24);
     assert.throws(() => providerConnection({ provider: 'unknown' }), /不支援/);
@@ -73,6 +73,11 @@ test('UI NovelAI selectors exist exactly once; token input is not a persistent s
     assert.ok(ids.includes('cmi_provider'));
     assert.ok(ids.includes('cmi_novel_token'));
     assert.ok(!Object.keys(PROVIDER_DEFAULTS).some(key => /token|password/i.test(key)));
-    assert.match(js, /plan\.prefix\}\/output/);
+    assert.match(js, /client\.output\(path, signal\)/);
     assert.match(js, /current\.chat\[messageId\] !== message/);
+    assert.doesNotMatch(js, /api\/plugins|enableServerPlugins|pluginPost|isPluginAvailable/);
+    assert.ok(ids.includes('cmi_novel_passphrase'));
+    assert.ok(ids.includes('cmi_novel_unlock'));
+    assert.ok(ids.includes('cmi_novel_session'));
+    assert.ok(!Object.keys(PROVIDER_DEFAULTS).some(key => /passphrase/i.test(key)));
 });
