@@ -30,6 +30,19 @@ test('manual OpenAI-compatible client sends the configured URL, model, key heade
     assert.deepEqual(calls[0].body, { model: 'example-model', messages, max_tokens: 321, stream: false });
 });
 
+test('API rejection of an original preset role is surfaced without rewriting or retrying', async () => {
+    const calls = [];
+    const messages = [{ role: 'model', content: 'Original preset role' }];
+    const client = createManualLlmClient({ fetchImpl: async (_url, init) => {
+        calls.push(JSON.parse(init.body));
+        return Response.json({ error: 'unsupported role' }, { status: 400 });
+    } });
+    await assert.rejects(client.send(settings, messages, 8), /HTTP 400/);
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0].messages, messages);
+    assert.equal(messages[0].role, 'model');
+});
+
 test('custom API key header and empty prefix support non-Bearer compatible services', async () => {
     let request;
     const client = createManualLlmClient({ fetchImpl: async (_url, init) => {

@@ -116,11 +116,15 @@ for (const mode of ['manual', 'profile']) {
                 { identifier: 'main', role: 'system', content: 'Draw {{char}}. {{description}}. {{lastMessage}} #{{lastMessageId}}' },
                 { identifier: 'chatHistory', marker: true },
                 { identifier: 'jailbreak', role: 'user', content: 'Tags only' },
-                { identifier: 'off', role: 'system', content: 'disabled' },
+                { identifier: 'prefill', role: 'model', content: 'landscape,' },
+                { identifier: 'off', role: 'unknown', content: 'disabled' },
+                { identifier: 'unlisted', role: 'model', content: 'UNLISTED' },
+                { identifier: 'in-chat', role: 'model', content: 'IGNORED IN-CHAT', injection_position: 1, injection_depth: 0 },
             ],
             prompt_order: [{ character_id: 100001, order: [
                 { identifier: 'main', enabled: true }, { identifier: 'chatHistory', enabled: true },
-                { identifier: 'jailbreak', enabled: true }, { identifier: 'off', enabled: false },
+                { identifier: 'jailbreak', enabled: true }, { identifier: 'prefill', enabled: true },
+                { identifier: 'off', enabled: false }, { identifier: 'in-chat', enabled: true },
             ] }],
         }), 'image.json');
         Object.assign(f.settings, { promptConnectionMode: mode, promptPresetMode: 'preset', llmPresetId: 'test', llmPresets: [{ id: 'test', ...imported }] });
@@ -139,7 +143,10 @@ for (const mode of ['manual', 'profile']) {
         assert.deepEqual(JSON.parse(JSON.stringify(body.messages)), [
             { role: 'system', content: 'Draw Alice. Alice wears red. Target {{user}} literal #0' },
             { role: 'assistant', content: 'Alice: Target {{user}} literal' }, { role: 'user', content: 'Tags only' },
+            { role: 'model', content: 'landscape,' },
         ]);
+        assert.deepEqual(imported.preset.prompts.filter(item => ['prefill', 'off', 'unlisted', 'in-chat'].includes(item.identifier))
+            .map(item => [item.identifier, item.role]), [['prefill', 'model'], ['off', 'unknown'], ['unlisted', 'model'], ['in-chat', 'model']]);
         assert.equal(f.saves.length, 2);
         assert.equal(f.settings.systemPrompt.includes('expert prompt engineer'), true);
         assert.doesNotMatch(JSON.stringify(f.calls), /evil.invalid|FUTURE CONTENT/);

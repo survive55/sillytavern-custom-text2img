@@ -20,6 +20,91 @@ test('CC uses order.enabled and order identifiers, not storage order or prompt.e
     assert.deepEqual(raw, before);
 });
 
+test('imports preserve model and unknown roles without activating unused prompts or changing the source', () => {
+    const raw = fixture([
+        p('off', 'Do not send', { role: 'unknown' }),
+        p('empty', '', { role: 'model' }),
+        // Regression: a valid full preset can retain model-role prompts outside every order.
+        ...Array.from({ length: 4 }, (_, i) => p(`unlisted-${i}`, 'Not in order', { role: 'model' })),
+        p('quiet-off', 'Not for quiet', { role: 'tool', injection_trigger: ['normal'] }),
+        p('prefill', 'A quiet landscape', { role: 'model', enabled: false }),
+        p('main', 'Describe the scene', { role: 'user' }),
+        p('chatHistory', '', { marker: true }),
+    ], [o('main'), o('off', false), o('chatHistory'), o('empty'), o('quiet-off'), o('prefill')]);
+    raw.prompt_order.unshift({ character_id: 100000, order: [o('off')] });
+    const before = structuredClone(raw);
+    const imports = [normalizeLlmPreset(raw), importLlmPreset(JSON.stringify(raw), 'model-role.json')];
+    for (const type of ['full', 'character']) {
+        imports.push(importLlmPreset(JSON.stringify({ version: 1, type,
+            data: { prompts: raw.prompts, prompt_order: raw.prompt_order[1].order } })));
+    }
+    for (const { preset, orderId } of imports) {
+        assert.equal(orderId, '100001');
+        for (const original of raw.prompts) {
+            const normalized = preset.prompts.find(item => item.identifier === original.identifier);
+            assert.equal(normalized.role, original.role);
+            assert.equal(normalized.content, original.content);
+        }
+        assert.deepEqual(getPresetOrder(preset, orderId), raw.prompt_order[1].order);
+        const expanded = [];
+        assert.deepEqual(buildPresetMessages(preset, { history, expand: text => { expanded.push(text); return text; } }), [
+            { role: 'user', content: 'Describe the scene' }, ...history,
+            { role: 'model', content: 'A quiet landscape' },
+        ]);
+        assert.ok(!expanded.some(text => ['Do not send', 'Not in order', 'Not for quiet'].includes(text)));
+        assert.deepEqual(normalizeLlmPreset(JSON.parse(JSON.stringify(preset))).preset, preset, 'Reload preserves roles');
+        assert.deepEqual(preset.prompts.map(item => item.role), raw.prompts.map(item => item.role), 'Building must not rewrite saved roles');
+    }
+    assert.deepEqual(raw, before);
+});
+
+test('Relative follows ST Message: preserve truthy roles and default falsy roles only when building', () => {
+    for (const role of ['system', 'user', 'assistant', 'model', 'tool', 'developer', 'unknown', '', 0, false, null, 7, {}, []]) {
+        const raw = fixture([p('role', 'Text', { role })]);
+        const before = structuredClone(raw);
+        const { preset } = importLlmPreset(JSON.stringify(raw));
+        assert.deepEqual(preset.prompts[0].role, role);
+        assert.deepEqual(buildPresetMessages(preset, { history: [] }), [{ role: role || 'system', content: 'Text' }]);
+        assert.deepEqual(normalizeLlmPreset(JSON.parse(JSON.stringify(preset))).preset, preset);
+        assert.deepEqual(raw, before);
+    }
+    const { preset } = importLlmPreset(JSON.stringify(fixture([{ identifier: 'missing-role', content: 'Text' }])));
+    assert.equal(Object.hasOwn(preset.prompts[0], 'role'), false, 'Import must not synthesize a role');
+    assert.deepEqual(buildPresetMessages(preset, { history: [] }), [{ role: 'system', content: 'Text' }]);
+    assert.equal(Object.hasOwn(preset.prompts[0], 'role'), false);
+});
+
+test('In-Chat only groups native ST roles; ignored roles cannot shift later injection positions', () => {
+    const ignoredRoles = ['model', 'tool', 'developer', 'unknown', undefined, null, '', 0, false, {}, []];
+    const raw = fixture([p('chatHistory', '', { marker: true }),
+        ...ignoredRoles.map((role, i) => p(`ignored-${i}`, 'IGNORE', { role, injection_position: 1, injection_depth: 5 })),
+        p('deep', 'Deep', { role: 'assistant', injection_position: 1, injection_depth: 4 }),
+        p('model', 'IGNORE', { role: 'model', injection_position: 1, injection_depth: 1 }),
+        p('middle', 'Middle', { role: 'user', injection_position: 1, injection_depth: 1 }),
+        p('assistant', 'First', { role: 'assistant', injection_position: 1, injection_depth: 0 }),
+        p('assistant-2', 'Second', { role: 'assistant', injection_position: 1, injection_depth: 0 }),
+        p('user', 'User', { role: 'user', injection_position: 1, injection_depth: 0 }),
+        p('system', 'System', { injection_position: 1, injection_depth: 0 }),
+    ]);
+    assert.deepEqual(build(raw), [
+        { role: 'assistant', content: 'Deep' }, history[0], { role: 'user', content: 'Middle' }, history[1],
+        { role: 'assistant', content: 'First\nSecond' }, { role: 'user', content: 'User' }, { role: 'system', content: 'System' },
+    ]);
+    assert.throws(() => build(fixture([p('chatHistory'), p('only-model', 'Ignored', { role: 'model', injection_position: 1 })]), { history: [] }), /沒有任何/);
+});
+
+test('built-in field markers use ST nullish system fallback without changing the stored override', () => {
+    for (const role of [undefined, null, '', 'model', 'assistant']) {
+        const raw = fixture([p('chatHistory'), p('charDescription', '', { role, injection_position: 1, injection_depth: 0 })]);
+        const { preset } = normalizeLlmPreset(raw);
+        const messages = buildPresetMessages(preset, { history, fields: { description: 'Traveler' } });
+        const expected = role === undefined || role === null ? 'system' : role;
+        assert.deepEqual(messages, ['system', 'assistant'].includes(expected)
+            ? [...history, { role: expected, content: 'Traveler' }] : history);
+        assert.equal(preset.prompts.find(item => item.identifier === 'charDescription').role, role);
+    }
+});
+
 test('quiet triggers are respected, including a disabled main replacement', () => {
     const raw = fixture([p('main', 'normal only', { injection_trigger: ['normal'] }),
         p('quiet', 'tags', { injection_trigger: ['quiet'] }), p('chatHistory', '', { marker: true }), p('all', 'all')]);
@@ -138,7 +223,7 @@ test('group examples and history preserve each speaker rather than merging into 
 test('invalid and unsupported import formats fail atomically without modifying the source', () => {
     for (const raw of [[], null, {}, { prompts: { positive: 'panel' } }, { input_sequence: 'instruct' },
         { temperature: 1 }, { version: 2, type: 'full', data: {} }, fixture([p('x', {}, {})]),
-        fixture([p('x', '', { role: 'tool' })]), fixture([p('x', '', { injection_position: 9 })])]) {
+        fixture([p('x', '', { injection_position: 9 })])]) {
         assert.throws(() => normalizeLlmPreset(raw), /LLM 預設/);
     }
     assert.throws(() => importLlmPreset('{'), /有效的 JSON/);

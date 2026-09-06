@@ -86,14 +86,15 @@ export function normalizeLlmPreset(raw) {
         if (!plain(item) || typeof item.identifier !== 'string' || !item.identifier) fail('提示詞缺少 identifier。');
         if (map.has(item.identifier)) warnings.push('重複 identifier 已按 ST 匯入規則保留最後一項。');
         if (item.content !== undefined && typeof item.content !== 'string') fail('content 必須是字串。');
-        const role = item.role ?? 'system';
-        if (!['system', 'user', 'assistant'].includes(role)) fail('role 必須是 system、user 或 assistant。');
         if (item.injection_trigger !== undefined && (!Array.isArray(item.injection_trigger)
             || item.injection_trigger.some(trigger => typeof trigger !== 'string'))) fail('injection_trigger 必須是字串陣列。');
         const marker = item.marker === true || MARKERS.includes(item.identifier);
         map.set(item.identifier, {
             identifier: item.identifier, name: typeof item.name === 'string' ? item.name : item.identifier,
-            role, content: item.content ?? '', marker,
+            // ST import stores roles as-is, including roles in unused prompts.
+            // Defaults and In-Chat role filtering belong to message assembly.
+            ...(Object.hasOwn(item, 'role') ? { role: structuredClone(item.role) } : {}),
+            content: item.content ?? '', marker,
             injection_position: numeric(item.injection_position ?? 0, 'injection_position', 0, 1, true),
             injection_depth: numeric(item.injection_depth ?? 4, 'injection_depth', 0, 10000, true),
             injection_order: numeric(item.injection_order ?? 100, 'injection_order', 0, 10000, true),
@@ -247,18 +248,27 @@ export function buildPresetMessages(preset, { orderId = '', history = [], fields
             result.push(...exampleMessages(fields.mesExamples, { char, user, groupNames, expand, separator: preset.new_example_chat_prompt }));
             continue;
         }
-        let content;
+        let content, role = item.role;
         if (item.marker) {
             const field = { charDescription: 'description', charPersonality: 'personality', scenario: 'scenario', personaDescription: 'persona' }[item.identifier];
             if (!field) continue;
             content = String(fields[field] ?? '');
+            // ST merges field markers into generated system prompts using ??,
+            // before either Relative messages or In-Chat injections are built.
+            role ??= 'system';
             const format = item.identifier === 'charPersonality' ? preset.personality_format : item.identifier === 'scenario' ? preset.scenario_format : '';
             if (content && format) content = expand(format);
         } else content = expand(item.content || '');
         if (!content.trim()) continue;
-        const message = { role: item.role || 'system', content: content.trim() };
-        if (item.injection_position === 1) injections.push({ ...item, ...message });
-        else result.push(message);
+        if (item.injection_position === 1) {
+            // Native ST groups only these exact roles. Ignore other roles before
+            // counting injected messages, or they would shift later depths.
+            if (['system', 'user', 'assistant'].includes(role)) injections.push({ ...item, role, content: content.trim() });
+        } else {
+            // ST Message defaults only falsy roles; model/unknown truthy roles
+            // pass through unchanged for the selected transport/API to handle.
+            result.push({ role: role || 'system', content: content.trim() });
+        }
     }
     // Partial prompt exports sometimes omit chatHistory entirely. Supply the
     // selected scene, but never re-enable an explicitly disabled history marker.

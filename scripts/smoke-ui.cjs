@@ -296,15 +296,27 @@ async function main() {
         const presetJson = JSON.stringify({ temperature: 0.25, top_p: 0.8, openai_max_tokens: 777,
             custom_url: 'https://untrusted.invalid', custom_model: 'not-used',
             prompts: [{ identifier: 'phi', role: 'user', content: 'Output tags only' },
-                { identifier: 'off', role: 'system', content: 'NEVER SENT' },
+                { identifier: 'off', role: 'unknown', content: 'NEVER SENT' },
+                { identifier: 'prefill', role: 'model', content: 'landscape,' },
+                { identifier: 'unlisted', role: 'model', content: 'UNLISTED' },
+                { identifier: 'in-chat', role: 'model', content: 'IGNORED IN-CHAT', injection_position: 1, injection_depth: 0 },
                 { identifier: 'main', role: 'system', content: 'Illustrate {{char}}: {{description}}' },
                 { identifier: 'chatHistory', marker: true }],
             prompt_order: [{ character_id: 100001, order: [{ identifier: 'main', enabled: true },
-                { identifier: 'off', enabled: false }, { identifier: 'chatHistory', enabled: true }, { identifier: 'phi', enabled: true }] }],
+                { identifier: 'off', enabled: false }, { identifier: 'chatHistory', enabled: true },
+                { identifier: 'phi', enabled: true }, { identifier: 'prefill', enabled: true }, { identifier: 'in-chat', enabled: true }] }],
         });
         await page.locator('#cmi_llm_preset_file').setInputFiles({ name: 'image-preset.json', mimeType: 'application/json', buffer: Buffer.from(presetJson) });
         await page.waitForFunction(() => document.querySelector('#cmi_llm_preset_status').textContent.includes('已選用：image-preset'));
         const selectedPreset = await page.locator('#cmi_llm_preset').inputValue();
+        const readSavedRoles = () => page.evaluate(key => {
+            const settings = SillyTavern.getContext().extensionSettings[key];
+            return settings.llmPresets.find(record => record.id === settings.llmPresetId).preset.prompts
+                .filter(item => ['off', 'prefill', 'unlisted', 'in-chat'].includes(item.identifier))
+                .map(item => [item.identifier, item.role]);
+        }, settingsKey);
+        const expectedRoles = [['off', 'unknown'], ['prefill', 'model'], ['unlisted', 'model'], ['in-chat', 'model']];
+        assert.deepEqual(await readSavedRoles(), expectedRoles, 'Import must preserve all roles');
         assert.equal(await page.locator('#cmi_llm_preset_order').inputValue(), '100001');
         // Bad imports do not replace the selection or any template.
         await page.locator('#cmi_llm_preset_file').setInputFiles({ name: 'bad.json', mimeType: 'application/json', buffer: Buffer.from('{broken') });
@@ -320,6 +332,7 @@ async function main() {
             { role: 'system', content: 'Illustrate Browser fixture: A traveler in a forest.' },
             { role: 'assistant', content: 'A traveler watches sunrise over a forest clearing.' },
             { role: 'user', content: 'Output tags only' },
+            { role: 'model', content: 'landscape,' },
         ]);
         assert.equal(generatedRequest.max_tokens, 777); assert.equal(generatedRequest.temperature, 0.25);
         assert.equal(generatedRequest.top_p, 0.8); assert.equal(generatedRequest.model, 'browser-smoke-model');
@@ -336,6 +349,7 @@ async function main() {
         await fixtureChat(); await openPromptSettings();
         assert.equal(await page.locator('#cmi_prompt_preset_mode').inputValue(), 'preset');
         assert.equal(await page.locator('#cmi_llm_preset').inputValue(), selectedPreset);
+        assert.deepEqual(await readSavedRoles(), expectedRoles, 'Generation and reload must preserve saved roles');
         assert.match(await page.locator('#cmi_novel_status').textContent(), /鎖定/);
         assert.equal(await page.locator('#cmi_novel_token').inputValue(), '');
         await page.locator('#cmi_novel_test').click();

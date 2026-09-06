@@ -18,7 +18,9 @@
 - Prompt Manager `version: 1` 的 `full`／`character` 匯出：`data.prompts` 與平面 `data.prompt_order`。
 - Prompt Manager 之前的舊版欄位：`main_prompt`、`nsfw_prompt`、`jailbreak_prompt`。包含刻意留白的欄位，不偷偷補回 ST 的角色扮演預設。
 - 缺少順序時採 ST 內建順序，不依 `prompts` 儲存順序、不自動啟用所有自訂段落；有警告提示。明確的順序以該組為準。
-- 以順序項目的 `enabled` 決定啟用，按 `identifier` 對應文字，支援 `system`／`user`／`assistant`。
+- 以順序項目的 `enabled` 決定啟用，按 `identifier` 對應文字。**匯入與保存保留原始 `role`**，不將 `model` 改成 `assistant`，也不因未使用段落中的非標準角色拒絕整份預設。未列入所選順序、停用或不符合 quiet 觸發的段落不會送出。
+- **Relative 角色**依 ST `Message` 行為：保留原角色，只有缺少角色或 falsy 值才在組裝訊息時使用 `system`，不改寫保存資料。`model` 等非標準角色原樣交給 Connection Manager 的 ST 傳輸流程／手動 API；API 可能拒絕，不保證所有角色均能成功生成，插件不自動改寫或重送。
+- **In-Chat 角色**依 ST 原生分組規則，只注入精確符合 `system`／`user`／`assistant` 的段落；`model`、未知或缺少角色的自訂段落不注入，也不佔用深度位置。角色／Persona 等欄位 marker 先按 ST 的 nullish 覆寫規則補 `system`，保存的角色仍不變。
 - 背景提示詞生成採 **quiet**。`injection_trigger` 留空適用所有類型，有值則必須包含 `quiet`。只勾 Normal 的段落不會在此模式送出。
 - Relative 按順序排列；In-Chat 按 `injection_depth`、`injection_order` 注入。深度計算原始聊天訊息數，不計已插入的段落。同深度、同 order、同 role 合併換行；角色排列依本機 ST 的反轉歷史演算法為 assistant → user → system。
 - `chatHistory` 放入所選前文及目標樓層。沒有列出 marker 的部分匯出會補場景（在 PHI 前）；**明確停用的 marker 不重啟**。停用時可以在段落用 `{{message}}` 自行引用場景。
@@ -42,6 +44,7 @@
 - 升級仍預設選 **原有 System / User 模板**。既有模板、連線選擇、手動 API 欄位、token 上限、图片參數與歷史圖集不變。
 - 原 Text Completion／Instruct 連線在原模板模式照常使用；選 Chat Completion 匯入預設時，不將它猜測轉換為文字補全格式，而是請使用者改用 CC 連線。
 - 切回模板不刪除已匯入的預設；刪除所選預設需確認，然後恢復原模板模式。還原模板按鈕不刪除 LLM 預設。
+- 若使用過將 `model` 轉為 `assistant` 的本機測試版，請重新匯入原始 JSON 才能恢復原角色；插件不猜測既有 `assistant` 是否由轉換而來，也不反向改寫舊資料。
 - 不執行世界書掃描、第三方 Regex、JS／STscript、工具與完整角色扮演生成管線；這些欄位不會被當作提示詞文字送出。角色卡的 main/PHI overrides 不覆蓋此獨立生圖預設；`forbid_overrides` 因而不需改動主卡片設定。
 - 沒有完整 tokenizer/context-budget 截斷；由附帶樓層數限制聊天量，超過供應商 context 時 API 會報錯，請縮小前文或預設。`openai_max_context` 不會被誤當輸出 token 上限。
 - ComfyUI **圖片參數預設**仍按舊規則保留、合併 LoRA／解析度／正負提示詞，與 LLM 預設是不同選項。
