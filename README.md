@@ -46,7 +46,12 @@ GitHub 安裝下載的檔案已包含完整瀏覽器程式，不需要安裝後�
 
 匯入只保存於本插件；不切換 ST 主預設、不使用匯入 JSON 的 API 網址／模型／金鑰。可搭配獨立 Chat Completion profile 或手動 API，生成文字再交給圖片來源。**ComfyUI 圖片參數預設是另一個保留相容的選項，不是這裡的 LLM 預設。**
 
-升級預設仍使用原 System／User 模板，舊模板、Text Completion／Instruct 連線與所有圖片設定不會被取代。切回模板即可沿用原行為。多組角色順序可指定 `character_id`；不支援的世界書／第三方 Regex／腳本等會提示，不默默執行。
+升級預設仍使用原 System／User 模板，舊模板、Text Completion／Instruct 連線與所有圖片設定不會被取代。多組角色順序可指定 `character_id`。
+
+- **正文來源**：模板與匯入預設都只讀被點選樓層及之前的 **assistant `mes`**，不读主聊天 user 樓層、`extra.reasoning` 或畫面 HTML。前文數量只計 assistant 正文；獨立面板的新 user 對話仍會正常傳送。額外正文清理預設為 `[]`（關閉），可自行編輯 JSON 正則，或載入多段 thinking／think 清理範例；不寫死正文包裹方式。
+- **獨立正則／變數**：保存並執行原生 `extensions.regex_scripts`，尊重 disabled、來源、深度及 prompt/display 用途；不混用 SPreset、不載入主聊天或全域正則。`setvar`／`getvar` 等巨集使用本次獨立對話變數，不讀寫 ST 聊天變數。旧版匯入已丟棄正則，需重新匯入原始 JSON。
+- **獨立互動面板**：勾選該預設的「獨立提示詞對話／HTML 互動面板」。含已啟用顯示正則的新匯入會自動勾選面板；**嵌入 JS 仍預設不執行**，需於每次面板明確啟用。可繼續與提示詞 LLM 對話，再編輯最終提示詞，最後另外確認生圖。
+- **腳本邊界**：只提供有限的獨立輸入框／送出相容介面，並非完整酒館助手／STscript。嵌入腳本只能提出填入／送出請求；需再按插件自己的確認按鈕才能呼叫 LLM。使用無同源權限、credentialless 的 iframe，限制資源載入，但**不是完全斷網／CPU 沙箱**；只啟用可信腳本。不支援 credentialless 的瀏覽器只能靜態預覽。未支援的擴展不會偷偷在主聊天執行。
 
 詳見 [LLM 預設格式、套用規則及相容性限制](docs/llm-presets.md)。
 

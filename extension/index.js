@@ -26,7 +26,10 @@ import { createNovelAI } from './novelai.js';
 import { encryptToken, decryptToken } from './token-vault.js';
 import { normalizeToken } from './http.js';
 import { createManualLlmClient, parseExtraHeaders } from './manual-llm.js';
-import { LLM_PRESET_DEFAULTS, MAX_PRESET_BYTES, importLlmPreset, normalizeLlmPreset, getPresetOrder, buildPresetMessages, collectPresetHistory, presetCardContext, sendPromptRequest } from './llm-presets.js';
+import { LLM_PRESET_DEFAULTS, MAX_PRESET_BYTES, importLlmPreset, normalizeLlmPreset, getPresetOrder, presetCardContext, sendPromptRequest } from './llm-presets.js';
+import { SCENE_DEFAULTS, DEFAULT_BODY_CLEANUP, parseBodyCleanupRules, snapshotScene } from './scene-text.js';
+import { runPresetTask } from './preset-worker-client.js';
+import { showPresetConversation } from './preset-conversation.js';
 
 // Works for both a GitHub clone (extension/) and the flat install-ui deployment.
 const EXTENSION_FOLDER = new URL('.', import.meta.url).pathname
@@ -92,6 +95,7 @@ const defaultSettings = Object.freeze({
     advancedOverrides: '',
     ...PROVIDER_DEFAULTS,
     ...LLM_PRESET_DEFAULTS,
+    ...SCENE_DEFAULTS,
 });
 
 /** @type {WeakMap<HTMLElement, AbortController>} */
@@ -161,25 +165,6 @@ function listProfiles() {
             return false;
         }
     });
-}
-
-/**
- * Collect the texts of up to `depth` visible messages preceding `messageId`.
- * @param {number} messageId
- * @param {number} depth
- */
-function collectHistory(messageId, depth) {
-    const { chat } = SillyTavern.getContext();
-    if (!depth || depth <= 0) return '';
-    const lines = [];
-    for (let i = messageId - 1; i >= 0 && lines.length < depth; i--) {
-        const message = chat[i];
-        if (!message || message.is_system) continue;
-        const text = String(message.mes ?? '').trim();
-        if (!text) continue;
-        lines.unshift(`${message.name}: ${text}`);
-    }
-    return lines.join('\n\n');
 }
 
 /**
@@ -258,61 +243,58 @@ async function generatePrompt(messageId, message, signal, settings = getSettings
         }
     }
 
-    let messages, preset = null;
+    const snapshot = snapshotScene(context.chat, messageId, settings.historyDepth);
     let maxTokens = Math.max(16, Number(settings.maxTokens) || defaultSettings.maxTokens);
+    const request = async (messages, preset, requestSignal = signal) => {
+        log?.add('llm', '送出提示詞 LLM 請求', { data: { connectionMode, maxTokens, messageCount: messages.length } });
+        log?.detail('llm.request', '插件送往 LLM／Connection Manager 的訊息（非最終供應商 wire payload）', {
+            connectionMode, model: connectionMode === 'manual' ? settings.manualLlmModel : undefined,
+            profileId: connectionMode === 'profile' ? settings.profileId : undefined, messages, maxTokens,
+        });
+        const started = Date.now();
+        const result = await sendPromptRequest({ settings, messages, maxTokens, signal: requestSignal, preset, context, manualLlm });
+        requestSignal.throwIfAborted();
+        const content = typeof result === 'string' ? result : result?.content;
+        log?.add('llm', '已收到 LLM 回覆', { data: { durationMs: Date.now() - started, characters: String(content ?? '').length } });
+        log?.detail('llm.response', 'LLM 原始文字回覆', { content });
+        return String(content ?? '');
+    };
     if (settings.promptPresetMode === 'preset') {
         const record = selectedLlmPreset(settings);
         if (!record) throw new Error('所選 LLM 提示詞預設不存在，請匯入或重新選擇；不會自動改用其他提示詞。');
-        preset = normalizeLlmPreset(record.preset).preset;
-        const history = collectPresetHistory(context.chat, messageId, settings.historyDepth, Boolean(context.groupId));
-        const { fields, char } = presetCardContext(context, message);
-        const values = {
-            message: String(message.mes ?? '').trim(), history: collectHistory(messageId, Number(settings.historyDepth) || 0),
-            description: String(fields.description ?? ''), personality: String(fields.personality ?? ''),
-            scenario: String(fields.scenario ?? ''), persona: String(fields.persona ?? ''),
-            char: String(char ?? ''), user: String(context.name1 ?? ''),
-            lastChatMessage: String(message.mes ?? ''), lastMessage: String(message.mes ?? ''), lastMessageId: String(messageId),
-            lastUserMessage: String(context.chat.slice(0, messageId + 1).findLast(m => m.is_user && !m.is_system)?.mes ?? ''),
-            lastCharMessage: String(context.chat.slice(0, messageId + 1).findLast(m => !m.is_user && !m.is_system)?.mes ?? ''),
-        };
-        // Expand raw card fields under the selected author's names and scene.
-        // Then protect the resolved values from a second macro expansion.
-        for (const key of Object.keys(fields)) fields[key] = fillTemplate(fields[key], values);
-        Object.assign(values, { description: fields.description, personality: fields.personality,
-            scenario: fields.scenario, persona: fields.persona });
-        messages = buildPresetMessages(preset, { orderId: record.orderId, history, fields,
-            char: values.char, user: values.user, isGroup: Boolean(context.groupId),
-            groupNames: context.groupId ? (context.characters ?? []).map(card => card.name) : [],
-            expand: text => fillTemplate(text, values) });
+        const preset = normalizeLlmPreset(record.preset).preset;
         maxTokens = preset.openai_max_tokens ?? maxTokens;
-    } else {
-        // The original path stays intact, including Text Completion / Instruct.
-        const values = {
-            message: String(message.mes ?? '').trim(),
-            history: collectHistory(messageId, Number(settings.historyDepth) || 0),
-            description: resolveDescription(message),
+        const { fields, char, user } = presetCardContext(context, message);
+        let state = await runPresetTask('create', { preset, orderId: record.orderId, snapshot,
+            bodyCleanupRules: settings.bodyCleanupRules, fields, char, user,
+            isGroup: Boolean(context.groupId), groupNames: context.groupId ? (context.characters ?? []).map(card => card.name) : [] }, signal);
+        const turn = async (userText = null, dialogSignal = signal) => {
+            const requestSignal = AbortSignal.any([signal, dialogSignal]);
+            const draft = await runPresetTask('prepare', { state, userText }, requestSignal);
+            const content = await request(draft.messages, preset, requestSignal);
+            const response = await runPresetTask('accept', { state: draft.state, content }, requestSignal);
+            // Commit only after the API and local processing both succeeded.
+            state = response.state;
+            for (const warning of response.warnings) log?.add('llm.compatibility', warning, { level: 'warn' });
+            return response;
         };
-        const systemPrompt = fillTemplate(settings.systemPrompt, values).trim();
-        const userPrompt = fillTemplate(settings.userTemplate, values).trim();
-        messages = [];
-        if (systemPrompt) messages.push({ role: 'system', content: systemPrompt });
-        messages.push({ role: 'user', content: userPrompt });
+        const response = await turn();
+        if (record.interactive === true) return showPresetConversation({ initial: response, onTurn: turn, cleanPrompt, signal });
+        const prompt = cleanPrompt(response.prompt);
+        if (!prompt) throw new Error('提示詞生成模型回傳了空白內容。');
+        return prompt;
     }
-    log?.add('llm', '送出提示詞 LLM 請求', { data: { connectionMode, maxTokens, messageCount: messages.length } });
-    log?.detail('llm.request', '插件送往 LLM／Connection Manager 的訊息（非最終供應商 wire payload）', {
-        connectionMode, model: connectionMode === 'manual' ? settings.manualLlmModel : undefined,
-        profileId: connectionMode === 'profile' ? settings.profileId : undefined, messages, maxTokens,
-    });
-    const started = Date.now();
-    const result = await sendPromptRequest({ settings, messages, maxTokens, signal, preset, context, manualLlm });
-
-    const content = typeof result === 'string' ? result : result?.content;
-    log?.add('llm', '已收到 LLM 回覆', { data: { durationMs: Date.now() - started, characters: String(content ?? '').length } });
-    log?.detail('llm.response', 'LLM 原始文字回覆', { content });
-    const prompt = cleanPrompt(content);
-    if (!prompt) {
-        throw new Error('提示詞生成模型回傳了空白內容。');
-    }
+    // Legacy transport remains intact, but floor data now comes only from the
+    // selected assistant mes snapshot, never extra.reasoning or user floors.
+    const scene = await runPresetTask('clean', { snapshot, bodyCleanupRules: settings.bodyCleanupRules }, signal);
+    const values = { ...scene.values, description: resolveDescription(message), char: message.name ?? context.name2, user: context.name1 };
+    const systemPrompt = fillTemplate(settings.systemPrompt, values).trim();
+    const userPrompt = fillTemplate(settings.userTemplate, values).trim();
+    const messages = [];
+    if (systemPrompt) messages.push({ role: 'system', content: systemPrompt });
+    messages.push({ role: 'user', content: userPrompt });
+    const prompt = cleanPrompt(await request(messages, null));
+    if (!prompt) throw new Error('提示詞生成模型回傳了空白內容。');
     return prompt;
 }
 
@@ -544,7 +526,8 @@ async function onMessageButtonClick($button) {
         signal.throwIfAborted();
         update('llm', '正在請 AI 撰寫圖片提示詞…');
         let prompt = await generatePrompt(messageId, message, signal, settings, log);
-        if (settings.reviewPrompt) {
+        if (prompt === null) { log.add('cancel', '已取消獨立提示詞對話，未送出生圖請求。'); return; }
+        if (settings.reviewPrompt || (settings.promptPresetMode === 'preset' && selectedLlmPreset(settings)?.interactive === true)) {
             update('review', '等待檢視提示詞…');
             const edited = await reviewPrompt(prompt, settings.provider);
             signal.throwIfAborted();
@@ -703,10 +686,14 @@ function ensureMessageButtons() {
         if ($template.length && !$template.find(`.${BUTTON_CLASS}`).length) {
             $template.prepend(buttonHtml());
         }
+        const chat = SillyTavern.getContext().chat;
         $('#chat .mes .extraMesButtons').each(function () {
-            if (!$(this).find(`.${BUTTON_CLASS}`).length) {
-                $(this).prepend(buttonHtml());
+            const message = chat[Number($(this).closest('.mes').attr('mesid'))];
+            if (!message || message.is_user || message.is_system || message.extra?.type === 'narrator') {
+                $(this).find(`.${BUTTON_CLASS}`).remove();
+                return;
             }
+            if (!$(this).find(`.${BUTTON_CLASS}`).length) $(this).prepend(buttonHtml());
         });
     } else {
         $(`.${BUTTON_CLASS}`).remove();
@@ -762,6 +749,7 @@ function showLlmPresetSettings() {
     });
     const record = selectedLlmPreset(settings);
     $('#cmi_llm_preset_delete').prop('disabled', !record);
+    $('#cmi_llm_interactive').prop('disabled', !record).prop('checked', record?.interactive === true);
     const $order = $('#cmi_llm_preset_order').empty();
     if (!record) {
         setStatus('#cmi_llm_preset_status', active ? '請匯入生圖提示詞用的 Chat Completion JSON；不是 ComfyUI 圖片參數預設。' : '');
@@ -779,7 +767,11 @@ function showLlmPresetSettings() {
         const orderedIds = new Set(order.map(entry => entry.identifier));
         const unlisted = preset.prompts.filter(item => !orderedIds.has(item.identifier)).length;
         const max = preset.openai_max_tokens ?? settings.maxTokens;
+        const rules = preset.extensions?.regex_scripts ?? [];
+        const activeRules = rules.filter(rule => !rule.disabled);
         setStatus('#cmi_llm_preset_status', [`已選用：${record.name}；啟用 ${count} 項／停用 ${order.length - count} 項，未列入順序 ${unlisted} 項；依 quiet 觸發條件送出，回應上限 ${max} tokens。`,
+            `獨立原生正則 ${rules.length} 條：啟用 ${activeRules.length}、停用 ${rules.length - activeRules.length}；送出用途 ${activeRules.filter(rule => rule.promptOnly).length}、顯示用途 ${activeRules.filter(rule => rule.markdownOnly).length}（可重疊）。`,
+            '正文來源：assistant mes；變數只在本次獨立對話存活，不讀寫主聊天變數。',
             ...(record.warnings || [])].join('\n'));
     } catch (error) {
         setStatus('#cmi_llm_preset_status', String(error?.message || error), 'error');
@@ -801,7 +793,8 @@ async function onImportLlmPreset(event) {
         for (let suffix = 2; names.has(name); suffix++) name = `${imported.name} (${suffix})`;
         const id = globalThis.crypto?.randomUUID?.() ?? `llm-${Date.now()}-${Math.random().toString(36).slice(2)}`;
         // Commit only after validation. Duplicate names never overwrite a preset.
-        settings.llmPresets.push({ ...imported, name, id });
+        const interactive = imported.preset.extensions?.regex_scripts?.some(rule => !rule.disabled && rule.markdownOnly) ?? false;
+        settings.llmPresets.push({ ...imported, name, id, interactive });
         settings.llmPresetId = id;
         settings.promptPresetMode = 'preset';
         saveSettings();
@@ -1034,8 +1027,29 @@ function validateAdvanced() {
     }
 }
 
+function validateBodyCleanup() {
+    try {
+        const rules = parseBodyCleanupRules(getSettings().bodyCleanupRules);
+        setStatus('#cmi_body_cleanup_status', rules.length ? `${rules.length} 條有效規則（只處理本插件的文字副本）` : '額外清理關閉：直接使用 assistant 正文。', 'ok');
+    } catch (error) { setStatus('#cmi_body_cleanup_status', String(error?.message || error), 'error'); }
+}
+
+function bindPresetExtras(settings, bindText) {
+    bindText('#cmi_body_cleanup', 'bodyCleanupRules', value => String(value));
+    $('#cmi_body_cleanup').on('input change', validateBodyCleanup);
+    for (const [selector, value] of [['#cmi_body_cleanup_thinking', DEFAULT_BODY_CLEANUP], ['#cmi_body_cleanup_clear', '[]']]) {
+        $(selector).on('click', () => { settings.bodyCleanupRules = value; $('#cmi_body_cleanup').val(value); saveSettings(); validateBodyCleanup(); });
+    }
+    $('#cmi_llm_interactive').on('change', function () {
+        const record = selectedLlmPreset();
+        if (record) { record.interactive = $(this).prop('checked'); saveSettings(); }
+    });
+}
+
 function loadSettingsIntoUi() {
     const settings = getSettings();
+    $('#cmi_body_cleanup').val(settings.bodyCleanupRules);
+    validateBodyCleanup();
     $('#cmi_enabled').prop('checked', !!settings.enabled);
     $('#cmi_provider').val(settings.provider);
     for (const [selector, key] of NOVEL_UI_FIELDS) $(selector).val(settings[key]);
@@ -1090,6 +1104,7 @@ function bindSettingsUi() {
         });
     };
 
+    bindPresetExtras(settings, bindText);
     for (const [selector, key] of NOVEL_UI_FIELDS) bindText(selector, key, v => String(v));
     bindText('#cmi_provider', 'provider', v => String(v));
     $('#cmi_provider').on('change', () => {

@@ -10,6 +10,18 @@ import { normalizeToken } from '../http.js';
 import { createManualLlmClient, parseExtraHeaders } from '../manual-llm.js';
 import { encryptToken, decryptToken } from '../token-vault.js';
 import * as llmPresets from '../llm-presets.js';
+import * as sceneText from '../scene-text.js';
+import { createPresetState, preparePresetRequest, acceptPresetResponse } from '../preset-runtime.js';
+
+// Exercise real pure worker operations here; browser smoke verifies actual Worker isolation.
+async function runPresetTask(type, payload, signal) {
+    signal?.throwIfAborted();
+    if (type === 'clean') return sceneText.cleanScene(payload.snapshot, payload.bodyCleanupRules);
+    if (type === 'create') return createPresetState(payload);
+    if (type === 'prepare') return preparePresetRequest(payload.state, payload.userText);
+    if (type === 'accept') return acceptPresetResponse(payload.state, payload.content);
+    throw new Error(`Unknown worker test operation: ${type}`);
+}
 import { createLogStore, logSecrets } from '../logs.js';
 import { PNG_BASE64, PNG_BYTES, JOB_ID, panelLogin } from './fixtures.mjs';
 
@@ -21,7 +33,8 @@ const source = fs.readFileSync(new URL('../index.js', import.meta.url), 'utf8')
     .replace(/\ninit\(\)\.catch\([^\n]+\);\s*$/, '');
 assert.ok(!source.includes('init().catch'));
 
-function fixture({ provider = 'novelai', configured = true, onSubmit = () => {}, replyError = false, review = false } = {}) {
+function fixture({ provider = 'novelai', configured = true, onSubmit = () => {}, replyError = false, review = false,
+    conversation = async ({ initial }) => initial.prompt } = {}) {
     const calls = [], saves = [], notifications = [], prompts = [], reviews = [];
     const settings = { ...PROVIDER_DEFAULTS, provider, enabled: true, promptConnectionMode: 'profile', profileId: 'independent', reviewPrompt: review,
         manualLlmBaseUrl: 'https://llm.example/v1', manualLlmPath: 'chat/completions', manualLlmModel: 'manual-model',
@@ -64,7 +77,8 @@ function fixture({ provider = 'novelai', configured = true, onSubmit = () => {},
     const button = { get: () => element, addClass() { return this; }, removeClass() { return this; }, closest: () => ({ attr: () => '0' }) };
     const toast = { find: () => ({ text() {} }) };
     const sandbox = {
-        console, structuredClone, AbortController, AbortSignal, URL, ...llmPresets, createLogStore, logSecrets,
+        console, structuredClone, AbortController, AbortSignal, URL, ...llmPresets, ...sceneText, runPresetTask, createLogStore, logSecrets,
+        showPresetConversation: conversation,
         SillyTavern: { getContext: () => context }, $: () => ({ length: 1 }),
         toastr: Object.fromEntries(['info', 'warning', 'error', 'success', 'clear'].map(kind => [kind, (...args) => { notifications.push({ kind, args }); return toast; }])),
         MEDIA_DISPLAY: { GALLERY: 'gallery' }, MEDIA_SOURCE: { GENERATED: 'generated' }, MEDIA_TYPE: { IMAGE: 'image' }, SCROLL_BEHAVIOR: { KEEP: 'keep' },
@@ -261,6 +275,49 @@ test('a changed message is never replaced or attached to after generation', asyn
     await f.run();
     assert.equal(f.saves.length, 2); assert.equal(f.savedChats, 0); assert.equal(f.context.chat[0].extra, undefined);
     assert.ok(f.notifications.some(item => item.kind === 'warning'));
+});
+
+test('preset variables never call ST macros and interactive mode always confirms images', async t => {
+    const f = fixture({ review: false, conversation: async ({ initial, onTurn, signal }) => {
+        assert.equal(initial.raw, 'landscape, sunrise');
+        const next = await onTurn('Use sunset', signal);
+        return next.prompt;
+    } }); t.after(f.close);
+    const imported = llmPresets.importLlmPreset(JSON.stringify({ main_prompt: '{{setvar::x::private}}{{getvar::x}} {{lastMessage}}' }));
+    Object.assign(f.settings, { promptPresetMode: 'preset', llmPresetId: 'interactive', llmPresets: [{ id: 'interactive', ...imported, interactive: true }] });
+    f.context.CONNECT_API_MAP = { cc: { selected: 'openai' } }; f.context.extensionSettings.connectionManager.profiles[0].api = 'cc';
+    f.context.substituteParamsExtended = () => { throw new Error('Must not call ST macro engine'); };
+    const before = JSON.stringify(f.context.extensionSettings.variables);
+    await f.run();
+    assert.equal(f.prompts.length, 2); assert.equal(f.reviews.length, 1);
+    assert.equal(f.prompts[1][1].at(-1).content, 'Use sunset');
+    assert.equal(JSON.stringify(f.context.extensionSettings.variables), before);
+    assert.equal(f.saves.length, 2);
+});
+
+test('cancelled independent dialog cannot submit an image even when normal review is disabled', async t => {
+    const f = fixture({ review: false, conversation: async () => null }); t.after(f.close);
+    const imported = llmPresets.importLlmPreset(JSON.stringify({ main_prompt: 'Tags' }));
+    Object.assign(f.settings, { promptPresetMode: 'preset', llmPresetId: 'interactive', llmPresets: [{ id: 'interactive', ...imported, interactive: true }] });
+    f.context.CONNECT_API_MAP = { cc: { selected: 'openai' } }; f.context.extensionSettings.connectionManager.profiles[0].api = 'cc';
+    await f.run();
+    assert.equal(f.prompts.length, 1); assert.equal(f.saves.length, 0); assert.equal(f.calls.length, 0);
+});
+
+test('template scene macros use assistant mes only and cleanup is opt-in', async t => {
+    for (const cleanup of ['[]', sceneText.DEFAULT_BODY_CLEANUP]) {
+        const f = fixture(); t.after(f.close);
+        f.settings.bodyCleanupRules = cleanup;
+        f.message.mes = 'body<thinking>inline thought</thinking>';
+        f.message.extra = { reasoning: 'NEVER READ REASONING' };
+        f.settings.userTemplate = '{{message}}|{{lastMessage}}|{{lastCharMessage}}|{{lastUserMessage}}';
+        f.context.chat.push({ is_user: true, mes: 'NEVER READ USER' });
+        await f.run();
+        const messages = JSON.stringify(f.prompts[0][1]);
+        assert.doesNotMatch(messages, /NEVER READ/);
+        assert.equal(messages.includes('inline thought'), cleanup === '[]');
+        assert.equal(f.message.mes, 'body<thinking>inline thought</thinking>', 'Original message is never cleaned in place');
+    }
 });
 
 for (const provider of ['novelai', 'comfy-modal']) {

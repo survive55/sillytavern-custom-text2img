@@ -2,6 +2,8 @@
  * Isolated Chat Completion preset adapter. No oai_settings / PromptManager state
  * is changed. See docs/llm-presets.md for the ST source contract and boundaries.
  */
+import { normalizePresetRegex } from './preset-regex.js';
+
 export const LLM_PRESET_DEFAULTS = Object.freeze({
     promptPresetMode: 'template', llmPresets: [], llmPresetId: '',
 });
@@ -146,7 +148,12 @@ export function normalizeLlmPreset(raw) {
     if (preset.prompts.some(item => item.marker && (!MARKERS.includes(item.identifier) || item.identifier.startsWith('worldInfo')))) {
         warnings.push('世界書與未知 marker 不在獨立請求中展開，會略過；角色、Persona、範例與聊天 marker 可用。');
     }
-    if (source.extensions || source.extension_settings || source.regex_scripts) warnings.push('預設附帶的擴展／Regex／腳本設定不匯入、不執行。');
+    const regexScripts = normalizePresetRegex(source, warnings);
+    if (source.extensions?.regex_scripts !== undefined) preset.extensions = { regex_scripts: regexScripts };
+    if (source.extensions || source.extension_settings || source.regex_scripts) {
+        warnings.push('只支援原生預設 Regex 與隔離顯示介面；酒館助手 JS／STscript、SPreset 與其他擴展設定不匯入、不執行。');
+    }
+    if (source.extensions?.tavern_helper?.scripts?.length) warnings.push('此檔含酒館助手腳本：不會安裝或在主聊天執行，並非完整助手執行環境。');
     const omitted = ['top_k', 'top_a', 'min_p', 'repetition_penalty', 'reasoning_effort', 'verbosity',
         'bias_preset_selected', 'assistant_prefill', 'use_sysprompt', 'squash_system_messages', 'names_behavior',
         'enable_web_search', 'function_calling', 'request_images', 'n', 'openai_max_context']

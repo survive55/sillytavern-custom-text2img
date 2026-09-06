@@ -138,3 +138,25 @@
 .cmi-log-error { border-color: #e06c75; }
 .cmi-log-warn { border-color: #d9b65c; }
 .cmi-log-debug { border-color: #67a8ce; }
+
+.cmi-preset-conversation {
+    width: min(900px, 94vw);
+    max-height: 90vh;
+    overflow: auto;
+    color: var(--SmartThemeBodyColor, #eee);
+    background: var(--SmartThemeBlurTintColor, #252525);
+    border: 1px solid var(--SmartThemeBorderColor, #777);
+    border-radius: 10px;
+    padding: 20px;
+    text-align: left;
+}
+.cmi-preset-conversation::backdrop { background: #0009; }
+.cmi-preset-conversation pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 40vh; overflow: auto; }
+.cmi-preset-conversation label { display: block; margin: 12px 0; }
+.cmi-preset-conversation textarea { width: 100%; resize: vertical; }
+.cmi-preset-conversation .menu_button { display: inline-block; width: auto; height: auto; padding: 7px 12px; }
+.cmi-preset-conversation [hidden] { display: none !important; }
+.cmi-conversation-status { padding: 8px; white-space: pre-wrap; border-left: 3px solid #6aaada; }
+.cmi-conversation-script-controls { padding: 8px; border: 1px solid #cb9f51; margin: 8px 0; }
+.cmi-conversation-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.cmi-preset-frame { display: block; width: 100%; height: 480px; max-height: 700px; border: 1px solid #888; background: white; margin: 10px 0; }

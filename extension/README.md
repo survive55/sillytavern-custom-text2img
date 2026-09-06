@@ -4,7 +4,9 @@
 
 - 在 ST「安裝擴展」貼上 [專案網址](https://github.com/survive55/sillytavern-custom-text2img)，根目錄 manifest 會載入本目錄。
 - 提示詞 LLM 可選 Connection Manager，或直接手動配置 OpenAI 相容 API 的 Base URL、端點路徑、模型、API Key 與 Headers。
-- 「LLM 提示詞來源」可匯入 ST Chat Completion JSON（prompts／prompt_order 或舊版 main_prompt），按角色、順序、quiet 與 In-Chat 深度生成提示詞；匯入不切換主預設、不覆蓋 API 連線。升級仍沿用原模板，隨時可切回。世界書、第三方 Regex／腳本與非通用參數不會自動執行，請閱讀介面相容性提示。
+- 「LLM 提示詞來源」可匯入 ST Chat Completion JSON，按角色、順序、quiet 與 In-Chat 深度生成提示詞；不切換主預設、不覆蓋 API 連線。支援原生預設 Regex 及本次對話隔離變數；不載入全域／主聊天正則，不混用 SPreset。舊版匯入沒有保存正則，需重新匯入。
+- 樓層只讀 assistant 的 `mes` 正文，不讀主聊天 user 樓層、`extra.reasoning` 或畫面 HTML。額外正文清理預設關閉（`[]`），可編輯 JSON 正則或載入 thinking／think 範例；不改寫 ST 原紀錄。
+- 預設可啟用獨立提示詞對話面板。HTML 先靜態預覽，嵌入 JS 每次需明確啟用，只支援有限的獨立輸入／送出相容介面；不是完整酒館助手／STscript。iframe 沒有主頁同源權限，JS 需支援 credentialless 的瀏覽器。隔離限制資源載入，但不是完整斷網／CPU 沙箱，只執行可信預設。腳本「直接送出」只提出請求，需在插件面板確認才呼叫提示詞 LLM；圖片生成另行確認。世界書與其他擴展仍不執行。
 - ComfyUI 圖片參數預設与 LLM 預設分開保留。
 - 「生成／運行日誌」提供即時流程、任務 ID、耗時、進度、錯誤摘要，支援依任務／等級篩選、複製、下載與清除。只存於目前分頁（最多 500 筆／約 1 Mi 字元），重整即清空。
 - 詳細模式預設關閉，手動開啟後才記錄後續 LLM 訊息／回覆、生圖提示詞／參數及原始錯誤；憑證遮蔽、不記錄圖片 base64。詳細紀錄可能含私人聊天，分享前請檢查；關閉模式不刪除既有內容，需清除日誌。日誌不是 GPU 伺服器的完整終端輸出；NovelAI 不提供逐步取樣進度。
