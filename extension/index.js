@@ -26,7 +26,7 @@ import { LLM_PRESET_DEFAULTS, MAX_PRESET_BYTES, importLlmPreset, normalizeLlmPre
 import { SCENE_DEFAULTS, DEFAULT_BODY_CLEANUP, parseBodyCleanupRules, snapshotScene, isAssistantSceneMessage } from './scene-text.js';
 import { runPresetTask } from './preset-worker-client.js';
 import { showPresetConversation } from './preset-conversation.js';
-import { INLINE_KEY, INLINE_DEFAULTS, sceneLimit, scenePlanInstruction, parseScenePlan, inlineSlots, migrateInlineMedia, hasStaleInlineGallery, syncInlineSwipe, renderInlineScenes, isInlineControl } from './inline-scenes.js';
+import { INLINE_KEY, INLINE_DEFAULTS, sceneLimit, buildSceneTargets, scenePlanInstruction, parseScenePlan, inlineSlots, migrateInlineMedia, hasStaleInlineGallery, syncInlineSwipe, renderInlineScenes, isInlineControl } from './inline-scenes.js';
 
 // Works for both a GitHub clone (extension/) and the flat install-ui deployment.
 const EXTENSION_FOLDER = new URL('.', import.meta.url).pathname
@@ -242,14 +242,16 @@ async function generatePrompt(messageId, message, signal, settings = getSettings
         }
     }
 
+    const source = String(message.mes ?? '');
     const snapshot = snapshotScene(context.chat, messageId, settings.historyDepth);
     let maxTokens = Math.max(16, Number(settings.maxTokens) || defaultSettings.maxTokens);
     let inlineBody = inline && settings.promptPresetMode !== 'preset'
         ? (await runPresetTask('clean', { snapshot, bodyCleanupRules: settings.bodyCleanupRules }, signal)).target.text : null;
     const request = async (messages, preset, requestSignal = signal) => {
         if (inline) {
+            if (message.mes !== source || context.chat[messageId] !== message) throw new Error('正文在分析準備期間已變更；未送出 LLM 請求，請重新分析。');
             maxTokens = Math.min(8192, Math.max(256, Number(settings.inlineMaxTokens) || INLINE_DEFAULTS.inlineMaxTokens));
-            messages = [...messages, { role: 'system', content: scenePlanInstruction(inlineBody, settings.inlineMaxScenes) }];
+            messages = [...messages, { role: 'system', content: scenePlanInstruction(inlineBody, settings.inlineMaxScenes, buildSceneTargets(inlineBody, source)) }];
         }
         log?.add('llm', '送出提示詞 LLM 請求', { data: { connectionMode, maxTokens, messageCount: messages.length } });
         log?.detail('llm.request', '插件送往 LLM／Connection Manager 的訊息（非最終供應商 wire payload）', {
@@ -279,8 +281,13 @@ async function generatePrompt(messageId, message, signal, settings = getSettings
             if (inline) {
                 inlineBody = draft.sceneBody;
                 if (!inlineBody?.trim()) throw new Error('LLM 預設處理後沒有可分析的正文；未送出請求。');
+                for (const warning of draft.state.warnings) log?.add('llm.compatibility', warning, { level: 'warn' });
             }
             const content = await request(draft.messages, preset, requestSignal);
+            // This is a structured planning response, not a roleplay/prompt turn.
+            // Story extraction and preset output regexes can erase valid JSON.
+            // Input filtering/style stay active; normal independent turns still use accept.
+            if (inline) return parseScenePlan(content, inlineBody, source, settings.inlineMaxScenes);
             const response = await runPresetTask('accept', { state: draft.state, content }, requestSignal);
             // Commit only after the API and local processing both succeeded.
             state = response.state;
@@ -288,7 +295,7 @@ async function generatePrompt(messageId, message, signal, settings = getSettings
             return response;
         };
         const response = await turn();
-        if (inline) return parseScenePlan(response.prompt, inlineBody, message.mes, settings.inlineMaxScenes);
+        if (inline) return response;
         if (record.interactive === true) return showPresetConversation({ initial: response, onTurn: turn, cleanPrompt, signal });
         const prompt = cleanPrompt(response.prompt);
         if (!prompt) throw new Error('提示詞生成模型回傳了空白內容。');
@@ -304,7 +311,7 @@ async function generatePrompt(messageId, message, signal, settings = getSettings
     if (systemPrompt) messages.push({ role: 'system', content: systemPrompt });
     messages.push({ role: 'user', content: userPrompt });
     const raw = await request(messages, null);
-    if (inline) return parseScenePlan(raw, inlineBody, message.mes, settings.inlineMaxScenes);
+    if (inline) return parseScenePlan(raw, inlineBody, source, settings.inlineMaxScenes);
     const prompt = cleanPrompt(raw);
     if (!prompt) throw new Error('提示詞生成模型回傳了空白內容。');
     return prompt;

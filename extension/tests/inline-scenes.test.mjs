@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { INLINE_KEY, scenePlanInstruction, parseScenePlan, inlineSlots, markerFor, stripSceneMarkers, syncInlineSwipe, safeInlineImage, migrateInlineMedia, hasStaleInlineGallery } from '../inline-scenes.js';
+import { INLINE_KEY, buildSceneTargets, scenePlanInstruction, parseScenePlan, inlineSlots, markerFor, stripSceneMarkers, syncInlineSwipe, safeInlineImage, migrateInlineMedia, hasStaleInlineGallery } from '../inline-scenes.js';
 import { snapshotScene } from '../scene-text.js';
 const body = '她走進樹林。\n\n晚霞照亮湖面。';
 const scenes = [
@@ -41,6 +41,76 @@ test('anchors must uniquely match both cleaned body and source at a safe line bo
     assert.throws(() => plan([scenes[0]], code, code), /程式碼/);
     const withReasoning = '<think>unused</think>\n' + body;
     assert.ok(plan(scenes, withReasoning).mes.startsWith('<think>unused</think>\n'));
+});
+
+test('numbered targets preserve repeated paragraphs, Markdown punctuation and CRLF bytes', () => {
+    const cleaned = '**她走進樹林。**\r\n\r\n她停下。\r\n\r\n她停下。';
+    const source = '<think>not sent</think>\r\n' + cleaned + '  \r\n';
+    const targets = buildSceneTargets(cleaned, source);
+    assert.equal(targets.length, 3);
+    const raw = JSON.stringify({ scenes: [
+        { after_id: 'p3', label: '停下', prompt: 'standing' },
+        { after_id: 'p1', label: '林間', prompt: 'forest' },
+    ] });
+    const result = parseScenePlan(raw, cleaned, source, 3);
+    assert.deepEqual(result.slots.map(slot => slot.label), ['林間', '停下']);
+    assert.equal(result.mes.replace(/\n\n\[\[cmi-image:[\w-]+\]\]\n\n/g, ''), source);
+    assert.ok(result.mes.indexOf(markerFor(result.slots[0].id)) < result.mes.indexOf('她停下。'));
+    assert.ok(result.mes.indexOf(markerFor(result.slots[1].id)) > result.mes.lastIndexOf('她停下。'));
+    const instruction = scenePlanInstruction(cleaned, 3, targets);
+    assert.match(instruction, /after_id/); assert.doesNotMatch(instruction, /not sent|"end":/);
+});
+
+test('target discovery excludes unmappable text, ambiguous matches and fenced code before requesting', () => {
+    const source = 'header\nA.\nremoved\nB.\nfooter';
+    assert.deepEqual(buildSceneTargets('A.\nB.', source).map(t => t.end), [9, 20]);
+    assert.deepEqual(buildSceneTargets('rewritten', source), []);
+    assert.deepEqual(buildSceneTargets('A.', 'A.\nA.'), []);
+    assert.deepEqual(buildSceneTargets('A.', 'A. followed by more prose'), []);
+    for (const code of ['```text\nA.\n```', '~~~\nA.\n~~~']) {
+        assert.deepEqual(buildSceneTargets(code, code), []);
+    }
+    assert.throws(() => scenePlanInstruction('rewritten', 3, []), /未送出 LLM/);
+});
+
+test('targets exclude HTML attributes/comments/raw text and Markdown code contexts', () => {
+    for (const hidden of [
+        '<div title="\nhidden\n">\n</div>', '<!--\nhidden\n-->',
+        '<textarea>\nhidden\n</textarea>', '<pre>\nhidden\n</pre>',
+        '    hidden', '> ```js\n> hidden\n> ```',
+        '```js\n```not-a-closing-fence\nhidden\n```',
+    ]) {
+        const source = hidden + '\nVisible.';
+        assert.deepEqual(buildSceneTargets(source, source).map(t => t.text), ['Visible.'], hidden);
+        assert.throws(() => plan([{ ...scenes[0], after: 'hidden' }], source, source));
+    }
+    const wrapped = '<story>\nVisible.\n</story>';
+    assert.deepEqual(buildSceneTargets(wrapped, wrapped).map(t => t.text), ['Visible.']);
+});
+
+test('fallback mapping rejects cleaned collisions, reordered source and oversized scans', () => {
+    const source = 'A red fox.\nA blue fox.\nTail.';
+    assert.deepEqual(buildSceneTargets(source.replace('red', 'blue'), source).map(t => t.text), ['Tail.']);
+    assert.deepEqual(buildSceneTargets('Tail.\nA red fox.', source), []);
+    assert.throws(() => buildSceneTargets('x'.repeat(100001), 'x'.repeat(100001)), /正文過長/);
+    assert.throws(() => buildSceneTargets('x\n'.repeat(2001), ''), /2000 行|正文過長/);
+});
+
+test('numbered plans reject fabricated, conflicting and duplicate IDs without guessing', () => {
+    for (const scene of [
+        { after_id: 'p99' }, { after_id: 1 }, { after_id: '__proto__' },
+        { after_id: 'p1', after: body }, { after_id: null, after: body },
+    ]) assert.throws(() => plan([{ label: 'scene', prompt: 'forest', ...scene }]), /編號/);
+    const scene = { after_id: 'p1', label: 'scene', prompt: 'forest' };
+    assert.throws(() => plan([scene, scene]), /重複/);
+});
+
+test('planner protocol cleanup handles leading reasoning only, not JSON string contents', () => {
+    const json = JSON.stringify({ scenes: [{ after_id: 'p1', label: 'scene', prompt: 'sign reading <think>literal</think>' }] });
+    const result = parseScenePlan('<thinking>reasoning</thinking>\n```json\n' + json + '\n```', body, body, 3);
+    assert.equal(result.slots[0].prompt, 'sign reading <think>literal</think>');
+    assert.throws(() => parseScenePlan(' ', body, body, 3), /回傳空白/);
+    assert.throws(() => parseScenePlan('<think>unfinished\n' + json, body, body, 3), /有效的插圖 JSON/);
 });
 
 test('unknown, removed and foreign-swipe markers cannot become active slots', () => {

@@ -381,8 +381,8 @@ for (const mode of ['template', 'preset']) {
 
 const inlineBody = 'A traveler enters the forest.\n\nSunset lights the lake.';
 const inlineReply = JSON.stringify({ scenes: [
-    { after: 'A traveler enters the forest.', label: 'Forest', prompt: '1girl, forest, walking' },
-    { after: 'Sunset lights the lake.', label: 'Lake', prompt: 'lake, sunset' },
+    { after_id: 'p1', label: 'Forest', prompt: '1girl, forest, walking' },
+    { after_id: 'p2', label: 'Lake', prompt: 'lake, sunset' },
 ] });
 function inlineFixture(options) {
     const f = fixture(options);
@@ -490,6 +490,44 @@ test('planner target obeys preset raw/prompt filters and never reintroduces excl
     assert.match(f.message.mes, /HIDDEN_BY_PRESET/, 'Original text is never rewritten');
     assert.equal(inlineScenes.inlineSlots(f.message).length, 2);
 });
+
+for (const cleanup of ['body', 'raw', 'prompt', 'display']) {
+    test(`structured analysis bypasses destructive ${cleanup} response cleanup but keeps preset input/style`, async t => {
+        const f = inlineFixture(); t.after(f.close);
+        const eraseJson = { findRegex: '^\\s*\\{[\\s\\S]*$', replaceString: '' };
+        const imported = llmPresets.importLlmPreset(JSON.stringify({ main_prompt: 'KEEP STYLE {{message}}', extensions: { regex_scripts:
+            cleanup === 'body' ? [] : [{ ...eraseJson, id: 'output', scriptName: 'output', placement: [2],
+                promptOnly: cleanup === 'prompt', markdownOnly: cleanup === 'display', disabled: false }],
+        } }));
+        Object.assign(f.settings, { promptPresetMode: 'preset', llmPresetId: 'cleanup', llmPresets: [{ id: 'cleanup', ...imported }],
+            bodyCleanupRules: JSON.stringify(cleanup === 'body' ? [eraseJson] : []) });
+        f.context.CONNECT_API_MAP = { cc: { selected: 'openai' } }; f.context.extensionSettings.connectionManager.profiles[0].api = 'cc';
+        await f.analyze();
+        assert.equal(f.prompts.length, 1); assert.match(JSON.stringify(f.prompts[0][1]), /KEEP STYLE/);
+        assert.equal(inlineScenes.inlineSlots(f.message).length, 2);
+        assert.equal(f.calls.length, 0); assert.equal(f.savedChats, 1);
+        assert.equal(f.notifications.some(item => item.kind === 'error'), false);
+    });
+}
+
+test('unmappable cleaned body fails before LLM payment and never changes the message', async t => {
+    const f = inlineFixture(); t.after(f.close);
+    f.settings.bodyCleanupRules = JSON.stringify([{ findRegex: '[\\s\\S]+', replaceString: 'REWRITTEN SCENE' }]);
+    await f.analyze();
+    assert.equal(f.prompts.length, 0); assert.equal(f.calls.length, 0); assert.equal(f.savedChats, 0);
+    assert.equal(f.message.mes, inlineBody);
+    assert.ok(f.notifications.some(item => item.kind === 'error' && item.args[0].includes('清理規則')));
+});
+
+for (const reply of ['', '{"scenes":[{"after_id":"p99","label":"bad","prompt":"forest"}]}']) {
+    test(`bad planner reply ${JSON.stringify(reply)} never retries or submits images`, async t => {
+        const f = inlineFixture(); t.after(f.close);
+        f.context.ConnectionManagerRequestService.sendRequest = async (...args) => { f.prompts.push(args); return reply; };
+        await f.analyze();
+        assert.equal(f.prompts.length, 1); assert.equal(f.calls.length, 0); assert.equal(f.savedChats, 0);
+        assert.equal(f.message.mes, inlineBody);
+    });
+}
 
 for (const change of ['text', 'chat', 'swipe', 'message', 'invalid-json']) {
     test(`analysis discards ${change} results without inserting anything or submitting images`, async t => {

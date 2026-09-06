@@ -27,7 +27,7 @@ async function main() {
     const token = 'browser-smoke-fake-novel-token', phrase = 'browser smoke unlock phrase';
     const settingsKey = 'sillytavern_custom_text2img', password = 'browser-smoke-panel-password';
     const fixtureBody = 'A traveler watches sunrise over a forest clearing.';
-    const fixturePlan = JSON.stringify({ scenes: [{ after: fixtureBody, label: 'Sunrise', prompt: 'landscape, sunrise' }] });
+    const fixturePlan = JSON.stringify({ scenes: [{ after_id: 'p1', label: 'Sunrise', prompt: 'landscape, sunrise' }] });
     const makeMessage = (mes = fixtureBody) => ({ name: 'Browser fixture', is_user: false, is_system: false,
         send_date: new Date().toISOString(), mes, swipe_id: 0, extra: {} });
     const panelCalls = [], panelSubmissions = [], manualLlmCalls = [], fixtureErrors = [];
@@ -436,7 +436,8 @@ async function main() {
         ]);
         assert.equal(generatedRequest.messages.at(-1).role, 'system');
         assert.match(generatedRequest.messages.at(-1).content, /ILLUSTRATION PLAN TASK/);
-        assert.ok(generatedRequest.messages.at(-1).content.endsWith(JSON.stringify(fixtureBody)));
+        assert.ok(generatedRequest.messages.at(-1).content.includes(`TARGET BODY (JSON string):\n${JSON.stringify(fixtureBody)}`));
+        assert.deepEqual(JSON.parse(generatedRequest.messages.at(-1).content.split('\n').at(-1)), [{ id: 'p1', text: fixtureBody }]);
         assert.equal(generatedRequest.max_tokens, 2400, 'Analysis uses the dedicated budget, not preset 777');
         assert.equal(generatedRequest.temperature, 0.25);
         assert.equal(generatedRequest.top_p, 0.8); assert.equal(generatedRequest.model, 'browser-smoke-model');
