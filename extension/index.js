@@ -24,6 +24,7 @@ import { createNovelAI } from './novelai.js';
 import { encryptToken, decryptToken } from './token-vault.js';
 import { normalizeToken } from './http.js';
 import { createManualLlmClient, parseExtraHeaders } from './manual-llm.js';
+import { LLM_PRESET_DEFAULTS, MAX_PRESET_BYTES, importLlmPreset, normalizeLlmPreset, getPresetOrder, buildPresetMessages, collectPresetHistory, presetCardContext, sendPromptRequest } from './llm-presets.js';
 
 // Works for both a GitHub clone (extension/) and the flat install-ui deployment.
 const EXTENSION_FOLDER = new URL('.', import.meta.url).pathname
@@ -86,6 +87,7 @@ const defaultSettings = Object.freeze({
     seed: '',
     advancedOverrides: '',
     ...PROVIDER_DEFAULTS,
+    ...LLM_PRESET_DEFAULTS,
 });
 
 /** @type {WeakMap<HTMLElement, AbortController>} */
@@ -252,27 +254,47 @@ async function generatePrompt(messageId, message, signal, settings = getSettings
         }
     }
 
-    const values = {
-        message: String(message.mes ?? '').trim(),
-        history: collectHistory(messageId, Number(settings.historyDepth) || 0),
-        description: resolveDescription(message),
-    };
-    const systemPrompt = fillTemplate(settings.systemPrompt, values).trim();
-    const userPrompt = fillTemplate(settings.userTemplate, values).trim();
-
-    const messages = [];
-    if (systemPrompt) messages.push({ role: 'system', content: systemPrompt });
-    messages.push({ role: 'user', content: userPrompt });
-
-    const maxTokens = Math.max(16, Number(settings.maxTokens) || defaultSettings.maxTokens);
-    const result = connectionMode === 'manual'
-        ? await manualLlm.send(settings, messages, maxTokens, signal)
-        : await context.ConnectionManagerRequestService.sendRequest(
-            settings.profileId,
-            messages,
-            maxTokens,
-            { stream: false, signal, extractData: true, includePreset: true, includeInstruct: true },
-        );
+    let messages, preset = null;
+    let maxTokens = Math.max(16, Number(settings.maxTokens) || defaultSettings.maxTokens);
+    if (settings.promptPresetMode === 'preset') {
+        const record = selectedLlmPreset(settings);
+        if (!record) throw new Error('所選 LLM 提示詞預設不存在，請匯入或重新選擇；不會自動改用其他提示詞。');
+        preset = normalizeLlmPreset(record.preset).preset;
+        const history = collectPresetHistory(context.chat, messageId, settings.historyDepth, Boolean(context.groupId));
+        const { fields, char } = presetCardContext(context, message);
+        const values = {
+            message: String(message.mes ?? '').trim(), history: collectHistory(messageId, Number(settings.historyDepth) || 0),
+            description: String(fields.description ?? ''), personality: String(fields.personality ?? ''),
+            scenario: String(fields.scenario ?? ''), persona: String(fields.persona ?? ''),
+            char: String(char ?? ''), user: String(context.name1 ?? ''),
+            lastChatMessage: String(message.mes ?? ''), lastMessage: String(message.mes ?? ''), lastMessageId: String(messageId),
+            lastUserMessage: String(context.chat.slice(0, messageId + 1).findLast(m => m.is_user && !m.is_system)?.mes ?? ''),
+            lastCharMessage: String(context.chat.slice(0, messageId + 1).findLast(m => !m.is_user && !m.is_system)?.mes ?? ''),
+        };
+        // Expand raw card fields under the selected author's names and scene.
+        // Then protect the resolved values from a second macro expansion.
+        for (const key of Object.keys(fields)) fields[key] = fillTemplate(fields[key], values);
+        Object.assign(values, { description: fields.description, personality: fields.personality,
+            scenario: fields.scenario, persona: fields.persona });
+        messages = buildPresetMessages(preset, { orderId: record.orderId, history, fields,
+            char: values.char, user: values.user, isGroup: Boolean(context.groupId),
+            groupNames: context.groupId ? (context.characters ?? []).map(card => card.name) : [],
+            expand: text => fillTemplate(text, values) });
+        maxTokens = preset.openai_max_tokens ?? maxTokens;
+    } else {
+        // The original path stays intact, including Text Completion / Instruct.
+        const values = {
+            message: String(message.mes ?? '').trim(),
+            history: collectHistory(messageId, Number(settings.historyDepth) || 0),
+            description: resolveDescription(message),
+        };
+        const systemPrompt = fillTemplate(settings.systemPrompt, values).trim();
+        const userPrompt = fillTemplate(settings.userTemplate, values).trim();
+        messages = [];
+        if (systemPrompt) messages.push({ role: 'system', content: systemPrompt });
+        messages.push({ role: 'user', content: userPrompt });
+    }
+    const result = await sendPromptRequest({ settings, messages, maxTokens, signal, preset, context, manualLlm });
 
     const content = typeof result === 'string' ? result : result?.content;
     const prompt = cleanPrompt(content);
@@ -650,6 +672,92 @@ function refreshProfileOptions() {
     $select.val(settings.profileId || '');
 }
 
+function selectedLlmPreset(settings = getSettings()) {
+    return Array.isArray(settings.llmPresets) ? settings.llmPresets.find(item => item?.id === settings.llmPresetId) : null;
+}
+
+function refreshLlmPresetOptions() {
+    const settings = getSettings();
+    const records = Array.isArray(settings.llmPresets) ? settings.llmPresets : [];
+    const $select = $('#cmi_llm_preset').empty().append('<option value="">（請匯入或選擇 LLM 預設）</option>');
+    for (const record of records) {
+        if (record?.id) $('<option>').val(record.id).text(record.name || record.id).appendTo($select);
+    }
+    if (settings.llmPresetId && !selectedLlmPreset(settings)) {
+        $('<option>').val(settings.llmPresetId).text('（所選 LLM 預設已遺失）').appendTo($select);
+    }
+    $select.val(settings.llmPresetId);
+    $('#cmi_prompt_preset_mode').val(settings.promptPresetMode === 'preset' ? 'preset' : 'template');
+    showLlmPresetSettings();
+}
+
+function showLlmPresetSettings() {
+    const settings = getSettings(), active = settings.promptPresetMode === 'preset';
+    $('#cmi_settings [data-cmi-prompt-preset]').each(function () {
+        $(this).toggle($(this).attr('data-cmi-prompt-preset') === (active ? 'preset' : 'template'));
+    });
+    const record = selectedLlmPreset(settings);
+    $('#cmi_llm_preset_delete').prop('disabled', !record);
+    const $order = $('#cmi_llm_preset_order').empty();
+    if (!record) {
+        setStatus('#cmi_llm_preset_status', active ? '請匯入生圖提示詞用的 Chat Completion JSON；不是 ComfyUI 圖片參數預設。' : '');
+        return;
+    }
+    try {
+        const { preset } = normalizeLlmPreset(record.preset);
+        $order.append('<option value="">（請選擇順序）</option>');
+        for (const entry of preset.prompt_order) {
+            $('<option>').val(entry.character_id).text(entry.character_id === '100001' ? '全域順序（100001）' : `角色順序 ${entry.character_id}`).appendTo($order);
+        }
+        $order.val(record.orderId || '');
+        const order = getPresetOrder(preset, record.orderId);
+        const count = order.filter(entry => entry.enabled).length;
+        const max = preset.openai_max_tokens ?? settings.maxTokens;
+        setStatus('#cmi_llm_preset_status', [`已選用：${record.name}；啟用 ${count} 項，依 quiet 觸發條件送出，回應上限 ${max} tokens。`,
+            ...(record.warnings || [])].join('\n'));
+    } catch (error) {
+        setStatus('#cmi_llm_preset_status', String(error?.message || error), 'error');
+    }
+}
+
+async function onImportLlmPreset(event) {
+    const input = event.currentTarget, file = input.files?.[0];
+    if (!file) return;
+    const settings = getSettings();
+    try {
+        if (file.size > MAX_PRESET_BYTES) throw new Error('LLM 預設 JSON 不可超過 2 MiB。');
+        const imported = importLlmPreset(await file.text(), file.name);
+        if (getSettings() !== settings) throw new Error('使用者設定已變更，請重新匯入。');
+        if (!Array.isArray(settings.llmPresets)) throw new Error('LLM 預設清單損壞；為避免覆蓋舊資料，請先備份設定。');
+        if (settings.llmPresets.length >= 20) throw new Error('最多保存 20 個 LLM 預設，請先刪除不使用的項目。');
+        const names = new Set(settings.llmPresets.map(item => item?.name));
+        let name = imported.name;
+        for (let suffix = 2; names.has(name); suffix++) name = `${imported.name} (${suffix})`;
+        const id = globalThis.crypto?.randomUUID?.() ?? `llm-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        // Commit only after validation. Duplicate names never overwrite a preset.
+        settings.llmPresets.push({ ...imported, name, id });
+        settings.llmPresetId = id;
+        settings.promptPresetMode = 'preset';
+        saveSettings();
+        refreshLlmPresetOptions();
+    } catch (error) {
+        setStatus('#cmi_llm_preset_status', String(error?.message || error), 'error');
+    } finally { input.value = ''; }
+}
+
+async function deleteLlmPreset() {
+    const settings = getSettings(), record = selectedLlmPreset(settings);
+    if (!record) return;
+    const { callGenericPopup, POPUP_TYPE } = SillyTavern.getContext();
+    if (!(await callGenericPopup('刪除插件內選定的 LLM 預設？不影響 ST 原預設、連線或舊模板；刪除後恢復原模板模式。', POPUP_TYPE.CONFIRM))) return;
+    if (getSettings() !== settings || selectedLlmPreset(settings) !== record) return;
+    settings.llmPresets = settings.llmPresets.filter(item => item !== record);
+    settings.llmPresetId = '';
+    settings.promptPresetMode = 'template';
+    saveSettings();
+    refreshLlmPresetOptions();
+}
+
 function showPromptConnectionSettings() {
     const mode = getSettings().promptConnectionMode === 'manual' ? 'manual' : 'profile';
     $('#cmi_settings [data-cmi-prompt-connection]').each(function () {
@@ -863,6 +971,7 @@ function loadSettingsIntoUi() {
     $('#cmi_history_depth').val(settings.historyDepth);
     $('#cmi_system_prompt').val(settings.systemPrompt);
     $('#cmi_user_template').val(settings.userTemplate);
+    refreshLlmPresetOptions();
     $('#cmi_review_prompt').prop('checked', !!settings.reviewPrompt);
     $('#cmi_negative').val(settings.negativePrompt);
     $('#cmi_width').val(settings.width);
@@ -933,6 +1042,20 @@ function bindSettingsUi() {
         $input.attr('type', reveal ? 'text' : 'password');
         $(this).toggleClass('fa-eye', !reveal).toggleClass('fa-eye-slash', reveal);
     });
+    bindText('#cmi_prompt_preset_mode', 'promptPresetMode', v => v === 'preset' ? 'preset' : 'template');
+    $('#cmi_prompt_preset_mode').on('change', showLlmPresetSettings);
+    bindText('#cmi_llm_preset', 'llmPresetId', v => String(v || ''));
+    $('#cmi_llm_preset').on('change', showLlmPresetSettings);
+    $('#cmi_llm_preset_order').on('change', function () {
+        const record = selectedLlmPreset();
+        if (!record) return;
+        record.orderId = String($(this).val() || '');
+        saveSettings();
+        showLlmPresetSettings();
+    });
+    $('#cmi_llm_preset_import').on('click', () => $('#cmi_llm_preset_file').trigger('click'));
+    $('#cmi_llm_preset_file').on('change', onImportLlmPreset);
+    $('#cmi_llm_preset_delete').on('click', deleteLlmPreset);
     bindText('#cmi_max_tokens', 'maxTokens', (v) => Math.max(16, Number(v) || defaultSettings.maxTokens));
     bindText('#cmi_history_depth', 'historyDepth', (v) => Math.max(0, Number(v) || 0));
     bindText('#cmi_system_prompt', 'systemPrompt', (v) => String(v));

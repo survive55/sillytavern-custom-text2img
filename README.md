@@ -40,6 +40,16 @@ GitHub 安裝下載的檔案已包含完整瀏覽器程式，不需要安裝後�
 
 **手動模式的 API Key 會以明文保存在目前 ST 使用者的擴充設定，可能包含在設定匯出、備份或除錯資料中。** 請不要公開設定檔，並只在可信的 ST 網站及擴充環境使用。介面的「測試 LLM」會送出一個極短的實際 Chat Completions 請求，可能產生少量費用。
 
+## 生圖提示詞 LLM 預設
+
+在「提示詞生成 → LLM 提示詞來源」選擇 **匯入的 Chat Completion LLM 預設**，再按「匯入並選用 JSON」。支援 ST 的 `prompts`／`prompt_order`、Prompt Manager 匯出及舊版 `main_prompt` 等欄位；實際按段落啟用狀態、順序、角色、quiet 觸發與 In-Chat 深度組装 LLM 訊息，而不只是套用溫度。
+
+匯入只保存於本插件；不切換 ST 主預設、不使用匯入 JSON 的 API 網址／模型／金鑰。可搭配獨立 Chat Completion profile 或手動 API，生成文字再交給圖片來源。**ComfyUI 圖片參數預設是另一個保留相容的選項，不是這裡的 LLM 預設。**
+
+升級預設仍使用原 System／User 模板，舊模板、Text Completion／Instruct 連線與所有圖片設定不會被取代。切回模板即可沿用原行為。多組角色順序可指定 `character_id`；不支援的世界書／第三方 Regex／腳本等會提示，不默默執行。
+
+詳見 [LLM 預設格式、套用規則及相容性限制](docs/llm-presets.md)。
+
 ## NovelAI
 
 不需要 ComfyUI、Modal、控制面板網址或 ST 的 NovelAI 主連線設定。

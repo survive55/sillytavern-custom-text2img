@@ -24,6 +24,13 @@
     opacity: 0.85;
 }
 
+#cmi_llm_preset_status {
+    display: block;
+    white-space: pre-line;
+    overflow-wrap: anywhere;
+    margin: 6px 0;
+}
+
 .cmi-settings .cmi-status.ok {
     color: var(--active, #6fbf73);
 }

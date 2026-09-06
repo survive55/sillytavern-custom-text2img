@@ -109,7 +109,7 @@ async function main() {
     ]);
     const panelUrl = `http://127.0.0.1:${panel.address().port}`;
     const manualLlmOrigin = `http://localhost:${manualLlmServer.address().port}`;
-    let browser, savedVault = null, novelFormat = 'json';
+    let browser, savedVault = null, savedLlm = null, novelFormat = 'json';
     let blockedSettingsWrites = 0, savedChats = 0;
     const backendRequests = [], unexpectedWrites = [], pageErrors = [], initializationErrors = [], novelCalls = [], uploads = [];
     const assetResponses = new Map();
@@ -164,14 +164,17 @@ async function main() {
                 settings.extension_settings[settingsKey] = { provider: 'novelai', enabled: true, promptConnectionMode: 'profile', profileId: 'browser-fixture-profile',
                     manualLlmBaseUrl: `${manualLlmOrigin}/v1`, manualLlmPath: 'chat/completions', manualLlmModel: 'browser-smoke-model',
                     manualLlmApiKey: 'browser-smoke-manual-key', manualLlmApiKeyHeader: 'Authorization', manualLlmApiKeyPrefix: 'Bearer', manualLlmExtraHeaders: '{"X-CMI-Smoke":"native-cors"}',
-                    baseUrl: panelUrl, password, panelPreset: '', novelVault: savedVault, novelBatchSize: 2, novelSeed: '0', batchSize: 2 };
+                    baseUrl: panelUrl, password, panelPreset: '', novelVault: savedVault, novelBatchSize: 2, novelSeed: '0', batchSize: 2, ...savedLlm };
                 body.settings = JSON.stringify(settings);
                 return route.fulfill({ response, json: body });
             }
             if (target.pathname === '/api/settings/save') {
                 blockedSettingsWrites++;
                 const body = request.postDataJSON();
-                savedVault = body?.extension_settings?.[settingsKey]?.novelVault ?? savedVault;
+                const fixtureSettings = body?.extension_settings?.[settingsKey];
+                savedVault = fixtureSettings?.novelVault ?? savedVault;
+                if (fixtureSettings?.llmPresets) savedLlm = { llmPresets: fixtureSettings.llmPresets,
+                    llmPresetId: fixtureSettings.llmPresetId, promptPresetMode: fixtureSettings.promptPresetMode };
                 return route.fulfill({ status: 200, json: { result: 'ok' } });
             }
             if (target.pathname === '/api/images/upload') {
@@ -208,16 +211,19 @@ async function main() {
             await page.waitForFunction(() => window.SillyTavern?.getContext().eventSource.autoFireLastArgs.has('app_ready'));
             await page.evaluate(() => {
                 const original = SillyTavern.getContext.bind(SillyTavern), context = original();
-                window.__cmiSmoke = { promptProfiles: [], savedChats: 0 };
+                window.__cmiSmoke = { promptProfiles: [], promptRequests: [], savedChats: 0 };
                 context.extensionSettings.connectionManager ??= {};
-                context.extensionSettings.connectionManager.profiles = [{ id: 'browser-fixture-profile', name: 'Independent fixture profile' }];
+                context.extensionSettings.connectionManager.profiles = [{ id: 'browser-fixture-profile', name: 'Independent fixture profile', api: 'fixture-cc' }];
                 SillyTavern.getContext = () => ({ ...original(), name2: 'Browser fixture', characterId: 0, groupId: null,
                     getCurrentChatId: () => 'browser-only-fixture', getCharacterCardFields: () => ({ description: 'A traveler in a forest.' }),
+                    characters: [{ name: 'Browser fixture', description: 'A traveler in a forest.' }],
+                    CONNECT_API_MAP: { ...context.CONNECT_API_MAP, 'fixture-cc': { selected: 'openai' } },
                     saveChat: async () => { window.__cmiSmoke.savedChats++; },
                     ConnectionManagerRequestService: {
                         isProfileSupported: () => true,
-                        sendRequest: async (id, _messages, _maxTokens, options) => {
-                            if (!options.includePreset || !options.includeInstruct) throw new Error('Prompt profile options were lost');
+                        sendRequest: async (id, messages, maxTokens, options, parameters) => {
+                            if (!options.includePreset) throw new Error('Trusted profile preset was lost');
+                            window.__cmiSmoke.promptRequests.push({ messages, maxTokens, parameters, includeInstruct: options.includeInstruct });
                             window.__cmiSmoke.promptProfiles.push(id); return { content: 'landscape, sunrise' };
                         },
                     },
@@ -282,7 +288,42 @@ async function main() {
         await clickGenerate(2);
         let media = await page.evaluate(() => SillyTavern.getContext().chat[0].extra.media);
         assert.deepEqual(media.map(image => image.seed), ['0', '1']);
+        // Import actual ST JSON through the file input, then generate through
+        // the native-CORS manual API. No paid network call is possible.
+        await openPromptSettings();
+        const oldTemplate = await page.locator('#cmi_system_prompt').inputValue();
+        await page.locator('#cmi_prompt_preset_mode').selectOption('preset');
+        const presetJson = JSON.stringify({ temperature: 0.25, top_p: 0.8, openai_max_tokens: 777,
+            custom_url: 'https://untrusted.invalid', custom_model: 'not-used',
+            prompts: [{ identifier: 'phi', role: 'user', content: 'Output tags only' },
+                { identifier: 'off', role: 'system', content: 'NEVER SENT' },
+                { identifier: 'main', role: 'system', content: 'Illustrate {{char}}: {{description}}' },
+                { identifier: 'chatHistory', marker: true }],
+            prompt_order: [{ character_id: 100001, order: [{ identifier: 'main', enabled: true },
+                { identifier: 'off', enabled: false }, { identifier: 'chatHistory', enabled: true }, { identifier: 'phi', enabled: true }] }],
+        });
+        await page.locator('#cmi_llm_preset_file').setInputFiles({ name: 'image-preset.json', mimeType: 'application/json', buffer: Buffer.from(presetJson) });
+        await page.waitForFunction(() => document.querySelector('#cmi_llm_preset_status').textContent.includes('已選用：image-preset'));
+        const selectedPreset = await page.locator('#cmi_llm_preset').inputValue();
+        assert.equal(await page.locator('#cmi_llm_preset_order').inputValue(), '100001');
+        // Bad imports do not replace the selection or any template.
+        await page.locator('#cmi_llm_preset_file').setInputFiles({ name: 'bad.json', mimeType: 'application/json', buffer: Buffer.from('{broken') });
+        await page.waitForFunction(() => document.querySelector('#cmi_llm_preset_status').textContent.includes('有效的 JSON'));
+        assert.equal(await page.locator('#cmi_llm_preset').inputValue(), selectedPreset);
+        await page.locator('#cmi_prompt_preset_mode').selectOption('template');
+        assert.equal(await page.locator('#cmi_system_prompt').inputValue(), oldTemplate);
+        await page.locator('#cmi_prompt_preset_mode').selectOption('preset');
+        await page.locator('#cmi_prompt_connection_mode').selectOption('manual');
         novelFormat = 'zip'; await clickGenerate(4);
+        const generatedRequest = manualLlmCalls.filter(call => call.method === 'POST').at(-1).body;
+        assert.deepEqual(generatedRequest.messages, [
+            { role: 'system', content: 'Illustrate Browser fixture: A traveler in a forest.' },
+            { role: 'assistant', content: 'A traveler watches sunrise over a forest clearing.' },
+            { role: 'user', content: 'Output tags only' },
+        ]);
+        assert.equal(generatedRequest.max_tokens, 777); assert.equal(generatedRequest.temperature, 0.25);
+        assert.equal(generatedRequest.top_p, 0.8); assert.equal(generatedRequest.model, 'browser-smoke-model');
+        assert.ok(savedLlm?.llmPresets?.length === 1, 'The imported preset must reach fixture settings persistence');
         media = await page.evaluate(() => SillyTavern.getContext().chat[0].extra.media);
         assert.equal(media.length, 4); assert.equal(media[2].seed, '0'); assert.equal(media[3].seed, undefined);
         savedChats += await page.evaluate(() => window.__cmiSmoke.savedChats);
@@ -292,7 +333,9 @@ async function main() {
         // Reload proves there is no remembered plaintext token. Only encrypted fixture settings survive.
         savedVault = record;
         await page.reload({ waitUntil: 'domcontentloaded' }); await page.locator('#cmi_settings').waitFor({ state: 'attached' });
-        await fixtureChat(); await openSettings();
+        await fixtureChat(); await openPromptSettings();
+        assert.equal(await page.locator('#cmi_prompt_preset_mode').inputValue(), 'preset');
+        assert.equal(await page.locator('#cmi_llm_preset').inputValue(), selectedPreset);
         assert.match(await page.locator('#cmi_novel_status').textContent(), /鎖定/);
         assert.equal(await page.locator('#cmi_novel_token').inputValue(), '');
         await page.locator('#cmi_novel_test').click();
@@ -320,6 +363,10 @@ async function main() {
         assert.ok(panelCalls.every(call => call.origin === url.origin && !call.cookie && !call.csrf));
         const profiles = await page.evaluate(() => window.__cmiSmoke.promptProfiles);
         assert.deepEqual(profiles, ['browser-fixture-profile']);
+        const profileRequest = await page.evaluate(() => window.__cmiSmoke.promptRequests[0]);
+        assert.deepEqual(profileRequest.messages, generatedRequest.messages);
+        assert.equal(profileRequest.maxTokens, 777); assert.equal(profileRequest.parameters.temperature, 0.25);
+        assert.equal(profileRequest.includeInstruct, false);
         savedChats += await page.evaluate(() => window.__cmiSmoke.savedChats);
         assert.equal(savedChats, 3); assert.equal(uploads.length, 6);
         assert.equal(novelCalls.filter(call => call.path === '/ai/generate-image').length, 2);

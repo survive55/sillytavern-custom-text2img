@@ -9,6 +9,7 @@ import { createPanelClient } from '../panel.js';
 import { normalizeToken } from '../http.js';
 import { createManualLlmClient, parseExtraHeaders } from '../manual-llm.js';
 import { encryptToken, decryptToken } from '../token-vault.js';
+import * as llmPresets from '../llm-presets.js';
 import { PNG_BASE64, PNG_BYTES, JOB_ID, panelLogin } from './fixtures.mjs';
 
 // Run actual button functions and both real browser transports. Only DOM/ST and
@@ -62,7 +63,7 @@ function fixture({ provider = 'novelai', configured = true, onSubmit = () => {},
     const button = { get: () => element, addClass() { return this; }, removeClass() { return this; }, closest: () => ({ attr: () => '0' }) };
     const toast = { find: () => ({ text() {} }) };
     const sandbox = {
-        console, structuredClone, AbortController, AbortSignal, URL,
+        console, structuredClone, AbortController, AbortSignal, URL, ...llmPresets,
         SillyTavern: { getContext: () => context }, $: () => ({ length: 1 }),
         toastr: Object.fromEntries(['info', 'warning', 'error', 'success', 'clear'].map(kind => [kind, (...args) => { notifications.push({ kind, args }); return toast; }])),
         MEDIA_DISPLAY: { GALLERY: 'gallery' }, MEDIA_SOURCE: { GENERATED: 'generated' }, MEDIA_TYPE: { IMAGE: 'image' }, SCROLL_BEHAVIOR: { KEEP: 'keep' },
@@ -106,6 +107,46 @@ test('manual OpenAI-compatible prompt mode bypasses Connection Manager and uses 
     assert.match(f.message.extra.media[0].title, /manual landscape/);
 });
 
+for (const mode of ['manual', 'profile']) {
+    test(`imported LLM preset drives real ${mode} button request with scoped macros and sampling`, async t => {
+        const f = fixture(); t.after(f.close);
+        const imported = llmPresets.importLlmPreset(JSON.stringify({
+            temperature: 0.3, openai_max_tokens: 900, custom_url: 'https://evil.invalid',
+            prompts: [
+                { identifier: 'main', role: 'system', content: 'Draw {{char}}. {{description}}. {{lastMessage}} #{{lastMessageId}}' },
+                { identifier: 'chatHistory', marker: true },
+                { identifier: 'jailbreak', role: 'user', content: 'Tags only' },
+                { identifier: 'off', role: 'system', content: 'disabled' },
+            ],
+            prompt_order: [{ character_id: 100001, order: [
+                { identifier: 'main', enabled: true }, { identifier: 'chatHistory', enabled: true },
+                { identifier: 'jailbreak', enabled: true }, { identifier: 'off', enabled: false },
+            ] }],
+        }), 'image.json');
+        Object.assign(f.settings, { promptConnectionMode: mode, promptPresetMode: 'preset', llmPresetId: 'test', llmPresets: [{ id: 'test', ...imported }] });
+        f.context.groupId = 'group'; f.context.name2 = 'Bob'; f.context.name1 = 'User';
+        f.context.characters = [{ name: 'Alice', avatar: 'alice.png', description: '{{char}} wears red' }, { name: 'Bob' }];
+        f.message.name = 'Alice'; f.message.original_avatar = 'alice.png';
+        f.message.mes = 'Target {{user}} literal';
+        f.context.chat.push({ mes: 'FUTURE CONTENT', name: 'Bob' });
+        f.context.substituteParamsExtended = text => text.replaceAll('{{char}}', 'Bob').replaceAll('{{lastMessage}}', 'FUTURE CONTENT');
+        f.context.CONNECT_API_MAP = { cc: { selected: 'openai' } };
+        f.context.extensionSettings.connectionManager.profiles[0].api = 'cc';
+        await f.run();
+        const body = mode === 'manual' ? f.calls.find(call => call.url.endsWith('/chat/completions')).body
+            : { messages: f.prompts[0][1], max_tokens: f.prompts[0][2], ...f.prompts[0][4] };
+        assert.equal(body.temperature, 0.3); assert.equal(body.max_tokens, 900);
+        assert.deepEqual(JSON.parse(JSON.stringify(body.messages)), [
+            { role: 'system', content: 'Draw Alice. Alice wears red. Target {{user}} literal #0' },
+            { role: 'assistant', content: 'Alice: Target {{user}} literal' }, { role: 'user', content: 'Tags only' },
+        ]);
+        assert.equal(f.saves.length, 2);
+        assert.equal(f.settings.systemPrompt.includes('expert prompt engineer'), true);
+        assert.doesNotMatch(JSON.stringify(f.calls), /evil.invalid|FUTURE CONTENT/);
+        if (mode === 'profile') assert.equal(f.prompts[0][3].includePreset, true);
+    });
+}
+
 test('real panel flow preserves presets, LoRAs, 64-bit seed and frozen connection after switching settings', async t => {
     const f = fixture({ provider: 'comfy-modal', onSubmit(context) {
         const settings = context.extensionSettings[SETTINGS_KEY];
@@ -132,6 +173,14 @@ test('ST 1.14 profile checker errors only skip newer unsupported profiles', asyn
         return profile.id === 'independent';
     };
     assert.deepEqual(f.profiles().map(profile => profile.id), ['independent']);
+});
+
+test('missing selected preset fails before any paid request instead of falling back to templates', async t => {
+    const f = fixture(); t.after(f.close);
+    f.settings.promptPresetMode = 'preset'; f.settings.llmPresetId = 'missing';
+    await f.run();
+    assert.equal(f.calls.length, 0); assert.equal(f.prompts.length, 0);
+    assert.ok(f.notifications.some(item => item.kind === 'error' && item.args[0].includes('預設不存在')));
 });
 
 test('missing/locked NovelAI token fails before any LLM, generation or image save', async t => {

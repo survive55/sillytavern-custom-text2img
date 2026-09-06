@@ -1,4 +1,5 @@
 import { HttpError, readLimited } from './http.js';
+import { presetSampling } from './llm-presets.js';
 
 const DEFAULT_PATH = 'chat/completions';
 const DEFAULT_TIMEOUT_MS = 120000;
@@ -101,7 +102,7 @@ function safeError(status) {
 }
 
 export function createManualLlmClient({ fetchImpl = (...args) => fetch(...args), timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
-    async function send(settings, messages, maxTokens, signal) {
+    async function send(settings, messages, maxTokens, signal, parameters = {}) {
         if (signal?.aborted) throw new ManualLlmError(499, '手動 LLM 請求已取消。');
         const model = String(settings.manualLlmModel ?? '').trim();
         if (!model) throw new ManualLlmError(400, '請填寫手動 LLM 模型名稱。');
@@ -126,7 +127,7 @@ export function createManualLlmClient({ fetchImpl = (...args) => fetch(...args),
             const response = await fetchImpl(url, {
                 method: 'POST', mode: 'cors', credentials: 'omit', redirect: 'error', referrerPolicy: 'no-referrer',
                 headers,
-                body: JSON.stringify({ model, messages, max_tokens: Math.max(1, Number(maxTokens) || 1), stream: false }),
+                body: JSON.stringify({ ...presetSampling(parameters), model, messages, max_tokens: Math.max(1, Number(maxTokens) || 1), stream: false }),
                 signal: controller.signal,
             });
             if (!response.ok) {
