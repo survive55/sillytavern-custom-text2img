@@ -16,6 +16,7 @@
 ## 正文來源與選配清理
 
 - 模板模式與預設模式都只讀 **assistant 樓層的 `mes` 正文**，範圍止於被點選樓層。不讀主聊天 user 樓層、`extra.reasoning`、後續樓層、DOM 渲染文字或畫面用 HTML。
+- 來源篩選共用同一規則：排除 ST 的 `is_user`／`is_system` 與 narrator；若訊息另有明確 `role`，僅接受 `assistant`，不把 `role: user` 因缺少 `is_user` 而誤當 assistant。目標不是 assistant 時停止，不回退到別的樓層。**這不刪除匯入預設本身的 `role: user` 指令，也不影響獨立面板的新輸入。**
 - 前文數量計算可用的 assistant 訊息。`{{message}}`、`{{history}}`、`{{lastMessage}}`、`{{lastChatMessage}}`、`{{lastCharMessage}}` 使用同一份文字副本；`{{lastMessageId}}` 保留目標 ST 樓層編號。讀取主聊天時 `{{lastUserMessage}}` 為空，**獨立面板中使用者新輸入的 user 訊息仍正常加入對話**。
 - ST `openai.js` 的 `setOpenAIMessages` 將 `mes` 映射為 `content`、`is_user` 映射為角色，沒有因 `role: assistant` 自動清理內嵌標記。ST 已分離的思考位於 `extra.reasoning`，本插件不讀取。
 - **正文額外清理預設為 `[]`（關閉）**，直接採用 ST 已保存的正文。不是固定要求 `<正文>` 或 `<content>` 包裹。

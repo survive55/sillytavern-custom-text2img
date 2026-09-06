@@ -270,10 +270,14 @@ test('character/persona/scenario markers, role overrides, formats and examples a
     ]);
 });
 
-test('history selection excludes system messages, blank messages and messages after the target', () => {
-    const chat = [{ mes: 'older', is_user: true }, { mes: 'system', is_system: true }, { mes: '' }, { mes: '{{user}} literal scene' }, { mes: 'future' }];
-    assert.deepEqual(collectPresetHistory(chat, 3, 1), [{ role: 'user', content: 'older' }, { role: 'assistant', content: '{{user}} literal scene' }]);
-    assert.equal(collectPresetHistory(chat, 3, 0).length, 1);
+test('history selection counts only assistant bodies and rejects a user target', () => {
+    const chat = [{ mes: 'earlier assistant' }, { mes: 'EXCLUDED USER', is_user: true },
+        { mes: 'EXCLUDED ROLE USER', role: 'user' }, { mes: 'EXCLUDED SYSTEM', is_system: true },
+        { mes: 'EXCLUDED NARRATOR', extra: { type: 'narrator' } }, { mes: '' },
+        { mes: '{{user}} literal scene', role: 'assistant' }, { mes: 'EXCLUDED FUTURE' }];
+    assert.deepEqual(collectPresetHistory(chat, 6, 1), [{ role: 'assistant', content: 'earlier assistant' }, { role: 'assistant', content: '{{user}} literal scene' }]);
+    assert.deepEqual(collectPresetHistory(chat, 6, 0), [{ role: 'assistant', content: '{{user}} literal scene' }]);
+    assert.throws(() => collectPresetHistory(chat, 2, 50), /目標樓層/);
 });
 
 test('group examples and history preserve each speaker rather than merging into the user', () => {

@@ -3,6 +3,7 @@
  * is changed. See docs/llm-presets.md for the ST source contract and boundaries.
  */
 import { normalizePresetRegex } from './preset-regex.js';
+import { snapshotScene } from './scene-text.js';
 
 export const LLM_PRESET_DEFAULTS = Object.freeze({
     promptPresetMode: 'template', llmPresets: [], llmPresetId: '',
@@ -235,13 +236,11 @@ export function presetCardContext(context, message) {
     } };
 }
 
-/** Scope history to the clicked message, never to the end of the current chat. */
+/** Use the same assistant-only source boundary as the live Worker pipeline. */
 export function collectPresetHistory(chat, messageId, depth, isGroup = false) {
-    const limit = Math.min(50, Math.max(0, Math.floor(Number(depth) || 0)));
-    const messages = chat.slice(0, messageId + 1).filter(message => message && !message.is_system && String(message.mes ?? '').trim());
-    return messages.slice(-(limit + 1)).map(message => ({
-        role: message.is_user ? 'user' : 'assistant',
-        content: `${isGroup && message.name ? `${message.name}: ` : ''}${String(message.mes).trim()}`,
+    return snapshotScene(chat, messageId, depth).history.map(message => ({
+        role: message.role,
+        content: `${isGroup && message.name ? `${message.name}: ` : ''}${message.text.trim()}`,
     }));
 }
 

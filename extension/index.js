@@ -27,7 +27,7 @@ import { encryptToken, decryptToken } from './token-vault.js';
 import { normalizeToken } from './http.js';
 import { createManualLlmClient, parseExtraHeaders } from './manual-llm.js';
 import { LLM_PRESET_DEFAULTS, MAX_PRESET_BYTES, importLlmPreset, normalizeLlmPreset, getPresetOrder, presetCardContext, sendPromptRequest } from './llm-presets.js';
-import { SCENE_DEFAULTS, DEFAULT_BODY_CLEANUP, parseBodyCleanupRules, snapshotScene } from './scene-text.js';
+import { SCENE_DEFAULTS, DEFAULT_BODY_CLEANUP, parseBodyCleanupRules, snapshotScene, isAssistantSceneMessage } from './scene-text.js';
 import { runPresetTask } from './preset-worker-client.js';
 import { showPresetConversation } from './preset-conversation.js';
 
@@ -689,7 +689,7 @@ function ensureMessageButtons() {
         const chat = SillyTavern.getContext().chat;
         $('#chat .mes .extraMesButtons').each(function () {
             const message = chat[Number($(this).closest('.mes').attr('mesid'))];
-            if (!message || message.is_user || message.is_system || message.extra?.type === 'narrator') {
+            if (!isAssistantSceneMessage(message)) {
                 $(this).find(`.${BUTTON_CLASS}`).remove();
                 return;
             }

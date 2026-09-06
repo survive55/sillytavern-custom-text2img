@@ -40,11 +40,13 @@ async function main() {
             window.SillyTavern = { getContext: () => ({ extensionSettings: { secret: 'MAIN SECRET' } }) };
             window.__mainSend = 0; document.querySelector('#send_but').onclick = () => window.__mainSend++;
             window.__calls = []; window.__result = 'pending';
-            const sourceChat = [{ is_user: true, mes: 'EXCLUDED USER' }, { mes: 'old scene', name: 'Artist', extra: { reasoning: 'EXCLUDED REASONING' } }, { mes: 'EXCLUDED FUTURE' }];
+            const sourceChat = [{ is_user: true, mes: 'EXCLUDED USER' }, { role: 'user', mes: 'EXCLUDED ROLE USER' },
+                { role: 'user', is_user: false, mes: 'EXCLUDED CONFLICTING USER' },
+                { role: 'assistant', mes: 'old scene', name: 'Artist', extra: { reasoning: 'EXCLUDED REASONING' } }, { mes: 'EXCLUDED FUTURE' }];
             const sourceBefore = JSON.stringify(sourceChat);
             const preset = normalizeLlmPreset({ prompts: [{ identifier: 'main', role: 'system', content: '{{setvar::private::yes}}{{getvar::private}} {{lastMessage}}' }, { identifier: 'chatHistory', marker: true }],
                 prompt_order: [{ character_id: 100001, order: [{ identifier: 'main', enabled: true }, { identifier: 'chatHistory', enabled: true }] }], extensions: { regex_scripts: rules } }).preset;
-            let state = await runPresetTask('create', { preset, snapshot: snapshotScene(sourceChat, 1, 10), fields: {}, char: 'Artist', user: 'User', bodyCleanupRules: '[]' });
+            let state = await runPresetTask('create', { preset, snapshot: snapshotScene(sourceChat, 3, 10), fields: {}, char: 'Artist', user: 'User', bodyCleanupRules: '[]' });
             const draft = await runPresetTask('prepare', { state });
             window.__firstRequest = draft.messages;
             const initial = await runPresetTask('accept', { state: draft.state, content: 'old light\n<SUOT>\n1. Choose dusk\n2. Choose dawn\n</SUOT>' });

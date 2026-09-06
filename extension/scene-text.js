@@ -21,25 +21,32 @@ export function cleanSceneText(text, rules) {
     for (const rule of rules) result = boundedText(result.replace(compileRegex(rule.findRegex), rule.replaceString));
     return result.trim();
 }
+/** ST normally uses is_user/is_system; an explicit non-assistant role must never slip through. */
+export function isAssistantSceneMessage(message) {
+    return Boolean(message && !message.is_user && !message.is_system && message.extra?.type !== 'narrator'
+        && (message.role == null || message.role === 'assistant'));
+}
 /** Select before crossing into a Worker: do not copy settings, credentials or future chat. */
 export function snapshotScene(chat, messageId, depth) {
     const visible = chat.slice(0, messageId + 1).map((message, id) => ({ message, id }))
-        .filter(({ message }) => message && !message.is_system && !message.is_user && message.extra?.type !== 'narrator' && String(message.mes ?? '').trim());
-    const pack = entry => entry ? { id: entry.id, role: entry.message.is_user ? 'user' : 'assistant', name: String(entry.message.name ?? ''), text: String(entry.message.mes ?? '') } : null;
+        .filter(({ message }) => isAssistantSceneMessage(message) && String(message.mes ?? '').trim());
+    const pack = entry => ({ id: entry.id, role: 'assistant', name: String(entry.message.name ?? ''), text: String(entry.message.mes ?? '') });
     const target = visible.find(entry => entry.id === messageId);
-    if (!target) throw new Error('找不到可讀取的目標樓層。');
+    if (!target) throw new Error('找不到可讀取的 assistant 目標樓層。');
     return { target: pack(target), history: visible.slice(-Math.min(51, Math.max(1, Math.floor(Number(depth) || 0) + 1))).map(pack),
-        lastUser: pack(visible.findLast(entry => entry.message.is_user)), lastChar: pack(visible.findLast(entry => !entry.message.is_user)) };
+        lastUser: null, lastChar: pack(target) };
 }
 export function cleanScene(snapshot, cleanup) {
     const rules = parseBodyCleanupRules(cleanup);
-    const clean = message => message ? { ...message, text: cleanSceneText(message.text, rules) } : null;
+    // This is main-chat scene data, not independent panel input. Recheck the
+    // boundary so legacy snapshots cannot populate user history or aliases.
+    const clean = message => message?.role === 'assistant' ? { ...message, text: cleanSceneText(message.text, rules) } : null;
     const target = clean(snapshot.target);
     if (!target?.text) throw new Error('目標樓層清理後沒有正文；未送出 LLM 或生圖請求。');
-    const history = snapshot.history.map(clean).filter(message => message.text);
-    const lastUser = clean(snapshot.lastUser), lastChar = clean(snapshot.lastChar);
+    const history = snapshot.history.map(clean).filter(message => message?.text);
+    const lastChar = clean(snapshot.lastChar);
     const values = { message: target.text, lastChatMessage: target.text, lastMessage: target.text, lastMessageId: String(target.id),
-        lastUserMessage: lastUser?.text ?? '', lastCharMessage: lastChar?.text ?? '',
+        lastUserMessage: '', lastCharMessage: lastChar?.text ?? '',
         history: history.filter(message => message.id !== target.id).map(message => `${message.name}: ${message.text}`).join('\n\n') };
     return { target, history, values };
 }

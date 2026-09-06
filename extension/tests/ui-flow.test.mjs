@@ -74,7 +74,7 @@ function fixture({ provider = 'novelai', configured = true, onSubmit = () => {},
     };
     const api = createNovelAI({ fetchImpl: fakeFetch, locks: null });
     const element = {};
-    const button = { get: () => element, addClass() { return this; }, removeClass() { return this; }, closest: () => ({ attr: () => '0' }) };
+    const button = { get: () => element, addClass() { return this; }, removeClass() { return this; }, closest: () => ({ attr: () => String(context.chat.indexOf(message)) }) };
     const toast = { find: () => ({ text() {} }) };
     const sandbox = {
         console, structuredClone, AbortController, AbortSignal, URL, ...llmPresets, ...sceneText, runPresetTask, createLogStore, logSecrets,
@@ -319,6 +319,50 @@ test('template scene macros use assistant mes only and cleanup is opt-in', async
         assert.equal(f.message.mes, 'body<thinking>inline thought</thinking>', 'Original message is never cleaned in place');
     }
 });
+
+for (const mode of ['template', 'preset']) {
+    for (const connection of ['profile', 'manual']) {
+        test(`${mode}/${connection}: only assistant main-chat bodies reach the LLM; preset user instructions stay`, async t => {
+            const f = fixture(); t.after(f.close);
+            Object.assign(f.settings, { promptPresetMode: mode, promptConnectionMode: connection, historyDepth: 2 });
+            const references = '{{message}}|{{history}}|{{lastMessage}}|{{lastChatMessage}}|{{lastCharMessage}}|USER=[{{lastUserMessage}}]';
+            f.settings.userTemplate = references;
+            f.context.chat.unshift({ mes: 'EARLIER ASSISTANT', name: 'Example' },
+                { is_user: true, mes: 'EXCLUDED ST USER' }, { role: 'user', mes: 'EXCLUDED ROLE USER' },
+                { role: 'user', is_user: false, mes: 'EXCLUDED CONFLICTING USER' });
+            f.context.chat.push({ role: 'assistant', mes: 'EXCLUDED FUTURE' });
+            f.message.extra = { reasoning: 'EXCLUDED REASONING' };
+            const input = f.context.chat.map(message => message.mes);
+            if (mode === 'preset') {
+                const imported = llmPresets.importLlmPreset(JSON.stringify({ prompts: [
+                    { identifier: 'main', role: 'user', content: `PRESET USER INSTRUCTION ${references}` },
+                    { identifier: 'chatHistory', marker: true },
+                ], prompt_order: [{ character_id: 100001, order: [
+                    { identifier: 'main', enabled: true }, { identifier: 'chatHistory', enabled: true },
+                ] }] }));
+                Object.assign(f.settings, { llmPresetId: 'test', llmPresets: [{ id: 'test', ...imported }] });
+                f.context.CONNECT_API_MAP = { cc: { selected: 'openai' } };
+                f.context.extensionSettings.connectionManager.profiles[0].api = 'cc';
+            }
+            await f.run();
+            const messages = connection === 'profile' ? f.prompts[0]?.[1]
+                : f.calls.find(call => call.url.endsWith('/chat/completions'))?.body.messages;
+            assert.ok(messages, 'A prompt request must be sent');
+            const text = JSON.stringify(messages);
+            assert.doesNotMatch(text, /EXCLUDED/);
+            assert.match(text, /EARLIER ASSISTANT/);
+            assert.match(text, /bright forest clearing/);
+            assert.match(text, /USER=\[\]/);
+            if (mode === 'preset') {
+                assert.equal(messages[0].role, 'user');
+                assert.match(messages[0].content, /PRESET USER INSTRUCTION/);
+                assert.ok(messages.slice(1).every(message => message.role === 'assistant'));
+            }
+            assert.deepEqual(f.context.chat.map(message => message.mes), input);
+            assert.equal(f.saves.length, 2);
+        });
+    }
+}
 
 for (const provider of ['novelai', 'comfy-modal']) {
     test(`${provider}: a lost submit response is not retried and errors are rendered as text`, async t => {
