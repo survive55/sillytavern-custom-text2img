@@ -181,7 +181,7 @@
                         <select id="cmi_llm_preset_order" class="text_pole"></select>
                         <small id="cmi_llm_preset_status" class="cmi-status" aria-live="polite"></small>
                         <small class="cmi-hint">匯入 ST Chat Completion 預設（prompts / prompt_order），或舊版 main_prompt / nsfw_prompt / jailbreak_prompt。只存入本插件，不切換或覆蓋 ST 主預設。API 網址、金鑰、Headers 與模型仍由上方連線決定。</small>
-                        <small class="cmi-hint">提示詞本身或所選順序任一處 enabled:false 都保持關閉；順序未明確啟用的條目也不送出。按角色、相對順序與 In-Chat 深度組裝訊息，生成類型為 quiet。Chat History 放入所選前文與目標樓層，不讀取之後的樓層；未列出此 marker 時自動放入場景，明確停用則不放入（可改用 \{{message}}）。此模式不附加下方舊 System / User 模板。</small>
+                        <small class="cmi-hint">與原生 ST 一致：以所選 prompt_order 的 enabled 開關為準，再套用 trigger；prompts 內的 enabled 不參與啟用判定。順序未明確啟用的條目不送出。按角色、相對順序與 In-Chat 深度組裝訊息，生成類型為 quiet。Chat History 放入所選前文與目標樓層，不讀取之後的樓層；未列出此 marker 時自動放入場景，明確停用則不放入（可改用 \{{message}}）。此模式不附加下方舊 System / User 模板。</small>
                         <label class="checkbox_label"><input id="cmi_llm_interactive" type="checkbox" /><span>使用獨立提示詞對話／HTML 互動面板（此預設）</span></label>
                         <small class="cmi-hint">原生 extensions.regex_scripts 只在此預設內依開關、深度和用途處理；不讀取主聊天／全域正則，不混用 SPreset。預設巨集變數在每次生圖對話中獨立。互動 HTML 先以靜態預覽顯示，JS 需於面板內明確啟用；送出仍需插件按鈕確認，生圖另行確認。</small>
                         <small class="cmi-hint">不執行世界書掃描、酒館助手腳本、STscript、工具或完整聊天生成流程。HTML 腳本只支援有限的獨立輸入框／送出相容介面，不提供主聊天 API；未支援巨集保留為文字並警告。舊版匯入未保存正則，請重新匯入原始 JSON。</small>

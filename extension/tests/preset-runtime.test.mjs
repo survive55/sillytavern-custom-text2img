@@ -104,6 +104,36 @@ test('request/response runtime keeps state transactional, cleans all aliases, re
     assert.equal(preparePresetRequest(state()).state.macroState.variables.find(([key]) => key === 'tone')[1], 'calm');
 });
 
+test('prompt-level false does not disable ordered prompts, variables or history across turns', () => {
+    const initial = state([], { prompts: [
+        { identifier: 'main', enabled: false, role: 'system', content: '{{setvar::tone::neutral}}Use {{getvar::tone}}' },
+        { identifier: 'chatHistory', enabled: false, marker: true },
+    ] });
+    const before = structuredClone(initial);
+    const first = preparePresetRequest(initial);
+    assert.deepEqual(first.messages, [
+        { role: 'system', content: 'Use neutral' },
+        { role: 'assistant', content: '<Interleaving>old scene</Interleaving>' },
+    ]);
+    assert.deepEqual(initial, before);
+    const response = acceptPresetResponse(first.state, 'landscape');
+    const second = preparePresetRequest(response.state, 'use sunset');
+    assert.deepEqual(second.messages, [...first.messages,
+        { role: 'assistant', content: 'landscape' }, { role: 'user', content: 'use sunset' }]);
+});
+
+test('history trigger excludes ST scene but does not discard independent follow-up', () => {
+    const initial = state([], { prompts: [
+        { identifier: 'main', role: 'system', content: 'Describe the scene' },
+        { identifier: 'chatHistory', marker: true, injection_trigger: ['normal'] },
+    ] });
+    const first = preparePresetRequest(initial);
+    assert.deepEqual(first.messages, [{ role: 'system', content: 'Describe the scene' }]);
+    const response = acceptPresetResponse(first.state, 'landscape');
+    assert.deepEqual(preparePresetRequest(response.state, 'use sunset').messages, [...first.messages,
+        { role: 'assistant', content: 'landscape' }, { role: 'user', content: 'use sunset' }]);
+});
+
 test('history marker stays off for ST scene but explicit independent follow-up is delivered', () => {
     const initial = state([], { prompt_order: [{ character_id: 100001, order: [{ identifier: 'main', enabled: true }, { identifier: 'chatHistory', enabled: false }] }] });
     const first = preparePresetRequest(initial);

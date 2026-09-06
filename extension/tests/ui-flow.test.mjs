@@ -208,8 +208,9 @@ for (const mode of ['manual', 'profile']) {
         assert.equal(body.temperature, 0.3); assert.equal(body.max_tokens, 900);
         assert.deepEqual(JSON.parse(JSON.stringify(body.messages)), [
             { role: 'system', content: 'Draw Alice. Alice wears red. Target {{user}} literal #0' },
-            { role: 'assistant', content: 'Alice: Target {{user}} literal' }, { role: 'user', content: 'Tags only' },
-            { role: 'model', content: 'landscape,' },
+            { role: 'assistant', content: 'Alice: Target {{user}} literal' }, { role: 'user', content: 'DEPTH OFF' },
+            { role: 'user', content: 'Tags only' }, { role: 'model', content: 'landscape,' },
+            { role: 'system', content: 'PROMPT OFF Target {{user}} literal' },
         ]);
         assert.deepEqual(imported.preset.prompts.filter(item => ['prefill', 'off', 'unlisted', 'in-chat'].includes(item.identifier))
             .map(item => [item.identifier, item.role]), [['prefill', 'model'], ['off', 'unknown'], ['unlisted', 'model'], ['in-chat', 'model']]);

@@ -1,4 +1,4 @@
-import { buildPresetMessages, getPresetOrder } from './llm-presets.js';
+import { buildPresetMessages, getPresetOrder, shouldTriggerPresetPrompt } from './llm-presets.js';
 import { applyPresetRegex, boundedText } from './preset-regex.js';
 import { createPresetMacros } from './preset-macros.js';
 import { cleanScene, cleanSceneText, parseBodyCleanupRules } from './scene-text.js';
@@ -42,13 +42,14 @@ export function preparePresetRequest(previous, userText = null) {
     Object.assign(values, fields);
     const messagesFrom = items => items.map(item => ({ role: item.role,
         content: `${state.isGroup && item.name ? `${item.name}: ` : ''}${item.text}` })).filter(item => item.content.trim());
-    const historyOff = getPresetOrder(state.preset, state.orderId).some(item => item.identifier === 'chatHistory' && !item.enabled)
-        || state.preset.prompts.some(item => item.identifier === 'chatHistory' && item.enabled === false);
+    const historyEntry = getPresetOrder(state.preset, state.orderId).find(item => item.identifier === 'chatHistory');
+    const historyPrompt = state.preset.prompts.find(item => item.identifier === 'chatHistory');
+    const historyOff = historyEntry && (!historyEntry.enabled || !shouldTriggerPresetPrompt(historyPrompt));
     const messages = buildPresetMessages(state.preset, { orderId: state.orderId, fields,
         history: historyOff ? [] : messagesFrom(processed), expand: macros.expand,
         char: state.char, user: state.user, isGroup: state.isGroup, groupNames: state.groupNames });
-    // A disabled ST-history marker must not silently discard explicitly submitted
-    // independent user turns. It stays disabled for all original ST floor data.
+    // A disabled or non-triggering ST-history marker must not discard explicit
+    // independent user turns. Original ST floor data stays excluded in either case.
     if (historyOff) messages.push(...messagesFrom(processed.slice(state.scene.history.length)));
     boundedText(JSON.stringify(messages));
     state.macroState = macros.snapshot();

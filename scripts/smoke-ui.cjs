@@ -329,8 +329,8 @@ async function main() {
         }, settingsKey);
         const expectedRoles = [['off', 'unknown'], ['prefill', 'model'], ['unlisted', 'model'], ['in-chat', 'model']];
         assert.deepEqual(await readSavedRoles(), expectedRoles, 'Import must preserve all roles');
-        const assertDisabledState = async () => {
-            assert.match(await page.locator('#cmi_llm_preset_status').textContent(), /啟用 5 項／停用 3 項，未列入順序 1 項/);
+        const assertOrderActivationState = async () => {
+            assert.match(await page.locator('#cmi_llm_preset_status').textContent(), /啟用 7 項／停用 1 項，未列入順序 1 項/);
             const flags = await page.evaluate(key => {
                 const settings = SillyTavern.getContext().extensionSettings[key];
                 const preset = settings.llmPresets.find(record => record.id === settings.llmPresetId).preset;
@@ -339,7 +339,7 @@ async function main() {
             }, settingsKey);
             assert.deepEqual(flags, [[false, true], [false, true]], 'Both source flags must survive import and reload');
         };
-        await assertDisabledState();
+        await assertOrderActivationState();
         assert.equal(await page.locator('#cmi_llm_preset_order').inputValue(), '100001');
         // Bad imports do not replace the selection or any template.
         await page.locator('#cmi_llm_preset_file').setInputFiles({ name: 'bad.json', mimeType: 'application/json', buffer: Buffer.from('{broken') });
@@ -354,8 +354,10 @@ async function main() {
         assert.deepEqual(generatedRequest.messages, [
             { role: 'system', content: 'Illustrate Browser fixture: A traveler in a forest.' },
             { role: 'assistant', content: 'A traveler watches sunrise over a forest clearing.' },
+            { role: 'user', content: 'DEPTH OFF' },
             { role: 'user', content: 'Output tags only' },
             { role: 'model', content: 'landscape,' },
+            { role: 'system', content: 'PROMPT OFF' },
         ]);
         assert.equal(generatedRequest.max_tokens, 777); assert.equal(generatedRequest.temperature, 0.25);
         assert.equal(generatedRequest.top_p, 0.8); assert.equal(generatedRequest.model, 'browser-smoke-model');
@@ -370,6 +372,7 @@ async function main() {
         const detailedLogs = await page.locator('#cmi_log_output').textContent();
         assert.match(detailedLogs, /llm.request/); assert.match(detailedLogs, /llm.response/);
         assert.match(detailedLogs, /Illustrate Browser fixture/);
+        assert.match(detailedLogs, /PROMPT OFF/); assert.match(detailedLogs, /DEPTH OFF/);
         for (const secret of [token, phrase, password, 'browser-smoke-manual-key', PANEL_TOKEN, PNG_BASE64]) assert.ok(!detailedLogs.includes(secret));
         await page.locator('#cmi_log_filter').selectOption('debug');
         assert.equal(await page.locator('#cmi_log_output .cmi-log-info').count(), 0);
@@ -406,7 +409,7 @@ async function main() {
         assert.equal(await page.locator('#cmi_prompt_preset_mode').inputValue(), 'preset');
         assert.equal(await page.locator('#cmi_llm_preset').inputValue(), selectedPreset);
         assert.deepEqual(await readSavedRoles(), expectedRoles, 'Generation and reload must preserve saved roles');
-        await assertDisabledState();
+        await assertOrderActivationState();
         assert.match(await page.locator('#cmi_novel_status').textContent(), /鎖定/);
         assert.equal(await page.locator('#cmi_novel_token').inputValue(), '');
         await page.locator('#cmi_novel_test').click();

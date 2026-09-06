@@ -58,7 +58,7 @@ function normalizeOrder(order) {
         seen.add(entry.identifier);
         if (entry.enabled !== undefined && typeof entry.enabled !== 'boolean') fail('enabled 必須是布林值。');
         // An order must explicitly opt in; a missing switch stays disabled.
-        // The prompt-level false veto is applied later by getPresetOrder.
+        // Native ST does not use prompt-level enabled metadata as a second switch.
         return { identifier: entry.identifier, enabled: entry.enabled === true };
     });
 }
@@ -99,8 +99,8 @@ export function normalizeLlmPreset(raw) {
             // ST import stores roles as-is, including roles in unused prompts.
             // Defaults and In-Chat role filtering belong to message assembly.
             ...(Object.hasOwn(item, 'role') ? { role: structuredClone(item.role) } : {}),
-            // Keep both source switches across saves/reloads. Either false is a
-            // veto; getPresetOrder computes the effective state without rewriting them.
+            // Preserve source metadata across saves/reloads without treating it
+            // as an activation switch; only the selected prompt_order controls that.
             ...(item.enabled !== undefined ? { enabled: item.enabled } : {}),
             content: item.content ?? '', marker,
             injection_position: numeric(item.injection_position ?? 0, 'injection_position', 0, 1, true),
@@ -170,12 +170,15 @@ export function getPresetOrder(preset, orderId) {
         : preset.prompt_order.length === 1 ? String(preset.prompt_order[0].character_id) : '');
     const order = preset.prompt_order.find(entry => String(entry.character_id) === id)?.order;
     if (!order) fail('請選擇有效的預設提示詞順序（character_id）。');
-    const byId = new Map(preset.prompts.map(item => [item.identifier, item]));
-    // Intentionally stricter than native ST: an explicit false in either place
-    // wins. Preserve the original switches so saving/reloading cannot lose a veto.
-    return order.map(entry => ({ ...entry,
-        enabled: entry.enabled === true && byId.get(entry.identifier)?.enabled !== false,
-    }));
+    // Native PromptManager uses the selected order switch, not prompt.enabled.
+    // Return copies so callers cannot rewrite the saved source order.
+    return order.map(entry => ({ ...entry, enabled: entry.enabled === true }));
+}
+
+/** Native PromptManager trigger semantics; independent generation uses quiet. */
+export function shouldTriggerPresetPrompt(prompt, generationType = 'quiet') {
+    if (!Array.isArray(prompt?.injection_trigger) || !prompt.injection_trigger.length) return true;
+    return prompt.injection_trigger.includes(generationType);
 }
 
 /** ST injects into reverse history, then reverses it: order asc, assistant/user/system. */
@@ -250,7 +253,7 @@ export function buildPresetMessages(preset, { orderId = '', history = [], fields
     const order = getPresetOrder(preset, orderId);
     const byId = new Map(preset.prompts.map(item => [item.identifier, item]));
     const enabled = order.filter(entry => entry.enabled === true).map(entry => byId.get(entry.identifier)).filter(Boolean)
-        .filter(item => !item.injection_trigger?.length || item.injection_trigger.includes('quiet'));
+        .filter(item => shouldTriggerPresetPrompt(item));
     const result = [], injections = [];
     let historyIndex = -1, phiIndex = -1;
     for (const item of enabled) {
@@ -288,7 +291,7 @@ export function buildPresetMessages(preset, { orderId = '', history = [], fields
     }
     // Partial prompt exports sometimes omit chatHistory entirely. Supply the
     // selected scene, but never re-enable an explicitly disabled history marker.
-    if (!order.some(entry => entry.identifier === 'chatHistory') && byId.get('chatHistory')?.enabled !== false) {
+    if (!order.some(entry => entry.identifier === 'chatHistory')) {
         historyIndex = phiIndex < 0 ? result.length : phiIndex;
         result.splice(historyIndex, 0, { history: true });
     }

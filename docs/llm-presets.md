@@ -34,7 +34,7 @@
 
 - 支援完整 CC JSON：`prompts`、`prompt_order`；Prompt Manager `version: 1` 的 `full`／`character` 匯出（`data`、平面順序）；舊版 `main_prompt`、`nsfw_prompt`、`jailbreak_prompt`，包含刻意空白，不補 ST 預設角色扮演文字。
 - 缺少順序時使用 ST 內建順序，不按 `prompts` 儲存順序，也不自動啟用所有自訂條目。
-- 按 `identifier` 對應。**提示詞本身或所選順序任一處 `enabled:false` 都是關閉**；順序必須明確為 `true`。保留兩處原始開關，重新載入／切換不會丟失關閉標記。
+- 按 `identifier` 對應，**與原生 ST 一致，以所選 `prompt_order` 的 `enabled` 開關為準，再套用 trigger**。順序必須明確為 `true`；未啟用或未列入所選順序的自訂條目不會送出。`prompts[].enabled` 僅保留為來源資料，不參與啟用判定，因此它即使是 `false`，也不會否決順序中的 `true`；匯入、重新載入與切換順序使用同一規則。
 - 保留原始 `role`，不將 `model` 改成 `assistant`。Relative 依 ST `Message` 行為，只為缺少或 falsy 角色補 `system`；其他角色交給傳輸／API，供應商可能拒絕。不因未使用的非標準角色拒絕整份匯入。
 - In-Chat 僅注入精確的 `system`／`user`／`assistant`，其他角色不注入也不佔深度。角色／Persona 等欄位 marker 依 nullish 規則補 `system`；保存角色不變。
 - 生成類型為 **quiet**：trigger 空白適用所有類型，否則必須含 `quiet`。
@@ -94,7 +94,7 @@
 - 最低 ST 1.14.0，需支援 module Worker／現代 Web API 的瀏覽器。JS 互動另需 credentialless（如新版 Chromium）。
 - 模板、Text Completion／Instruct、圖片參數及圖集保留；樓層來源按新規則限定 assistant 正文。
 - 切回模板不刪預設。刪除預設需確認，然後恢復模板。
-- **旧版已匯入項目需重新匯入原始 JSON**才能恢復未保存的 Regex、提示詞 enabled 或早期被改寫的 role。沒有原始資料時不猜測重建。
+- **旧版已匯入項目需重新匯入原始 JSON**才能恢復未保存的 Regex 或早期被改寫的 role。沒有原始資料時不猜測重建。已保存正確 `prompt_order` 的項目，更新並重整後即採用新的啟用判定，不必為 `prompts[].enabled` 的衝突重新匯入；若舊資料的順序開關曾被改寫，則需重新匯入原始 JSON。
 - 不提供完整 tokenizer／context-budget 截斷；過長時 API 可能拒絕，請減少前文／預設／對話輪次。`openai_max_context` 不當作輸出上限。
 - ComfyUI 圖片參數預設的 LoRA／解析度／正負提示詞仍按原流程，與 LLM 預設分開。
 
