@@ -30,6 +30,7 @@ import { LLM_PRESET_DEFAULTS, MAX_PRESET_BYTES, importLlmPreset, normalizeLlmPre
 import { SCENE_DEFAULTS, DEFAULT_BODY_CLEANUP, parseBodyCleanupRules, snapshotScene, isAssistantSceneMessage } from './scene-text.js';
 import { runPresetTask } from './preset-worker-client.js';
 import { showPresetConversation } from './preset-conversation.js';
+import { INLINE_KEY, INLINE_DEFAULTS, sceneLimit, scenePlanInstruction, parseScenePlan, inlineSlots, syncInlineSwipe, renderInlineScenes, isInlineControl } from './inline-scenes.js';
 
 // Works for both a GitHub clone (extension/) and the flat install-ui deployment.
 const EXTENSION_FOLDER = new URL('.', import.meta.url).pathname
@@ -96,7 +97,10 @@ const defaultSettings = Object.freeze({
     ...PROVIDER_DEFAULTS,
     ...LLM_PRESET_DEFAULTS,
     ...SCENE_DEFAULTS,
+    ...INLINE_DEFAULTS,
 });
+const activeMessages = new WeakMap();
+const ANALYZE_CLASS = 'cmi_message_analyze';
 
 /** @type {WeakMap<HTMLElement, AbortController>} */
 const activeJobs = new WeakMap();
@@ -231,7 +235,7 @@ function cleanPrompt(raw) {
  * @param {AbortSignal} signal
  * @returns {Promise<string>}
  */
-async function generatePrompt(messageId, message, signal, settings = getSettings(), log) {
+async function generatePrompt(messageId, message, signal, settings = getSettings(), log, inline = false) {
     const context = SillyTavern.getContext();
     const connectionMode = settings.promptConnectionMode === 'manual' ? 'manual' : 'profile';
     if (connectionMode === 'profile') {
@@ -245,7 +249,13 @@ async function generatePrompt(messageId, message, signal, settings = getSettings
 
     const snapshot = snapshotScene(context.chat, messageId, settings.historyDepth);
     let maxTokens = Math.max(16, Number(settings.maxTokens) || defaultSettings.maxTokens);
+    let inlineBody = inline && settings.promptPresetMode !== 'preset'
+        ? (await runPresetTask('clean', { snapshot, bodyCleanupRules: settings.bodyCleanupRules }, signal)).target.text : null;
     const request = async (messages, preset, requestSignal = signal) => {
+        if (inline) {
+            maxTokens = Math.min(8192, Math.max(256, Number(settings.inlineMaxTokens) || INLINE_DEFAULTS.inlineMaxTokens));
+            messages = [...messages, { role: 'system', content: scenePlanInstruction(inlineBody, settings.inlineMaxScenes) }];
+        }
         log?.add('llm', '送出提示詞 LLM 請求', { data: { connectionMode, maxTokens, messageCount: messages.length } });
         log?.detail('llm.request', '插件送往 LLM／Connection Manager 的訊息（非最終供應商 wire payload）', {
             connectionMode, model: connectionMode === 'manual' ? settings.manualLlmModel : undefined,
@@ -271,6 +281,10 @@ async function generatePrompt(messageId, message, signal, settings = getSettings
         const turn = async (userText = null, dialogSignal = signal) => {
             const requestSignal = AbortSignal.any([signal, dialogSignal]);
             const draft = await runPresetTask('prepare', { state, userText }, requestSignal);
+            if (inline) {
+                inlineBody = draft.sceneBody;
+                if (!inlineBody?.trim()) throw new Error('LLM 預設處理後沒有可分析的正文；未送出請求。');
+            }
             const content = await request(draft.messages, preset, requestSignal);
             const response = await runPresetTask('accept', { state: draft.state, content }, requestSignal);
             // Commit only after the API and local processing both succeeded.
@@ -279,6 +293,7 @@ async function generatePrompt(messageId, message, signal, settings = getSettings
             return response;
         };
         const response = await turn();
+        if (inline) return parseScenePlan(response.prompt, inlineBody, message.mes, settings.inlineMaxScenes);
         if (record.interactive === true) return showPresetConversation({ initial: response, onTurn: turn, cleanPrompt, signal });
         const prompt = cleanPrompt(response.prompt);
         if (!prompt) throw new Error('提示詞生成模型回傳了空白內容。');
@@ -293,7 +308,9 @@ async function generatePrompt(messageId, message, signal, settings = getSettings
     const messages = [];
     if (systemPrompt) messages.push({ role: 'system', content: systemPrompt });
     messages.push({ role: 'user', content: userPrompt });
-    const prompt = cleanPrompt(await request(messages, null));
+    const raw = await request(messages, null);
+    if (inline) return parseScenePlan(raw, inlineBody, message.mes, settings.inlineMaxScenes);
+    const prompt = cleanPrompt(raw);
     if (!prompt) throw new Error('提示詞生成模型回傳了空白內容。');
     return prompt;
 }
@@ -470,11 +487,61 @@ function createProgressToast(title, onAbort) {
 // Main flow
 // ---------------------------------------------------------------------------
 
+function renderMessageScenes(messageId) {
+    if (typeof document === 'undefined') return;
+    const message = SillyTavern.getContext().chat[messageId];
+    renderInlineScenes(document.querySelector(`#chat .mes[mesid="${messageId}"] .mes_text`), message,
+        getSettings().enabled && isAssistantSceneMessage(message), activeMessages.has(message));
+}
+
+async function onAnalyzeButtonClick($button) {
+    const context = SillyTavern.getContext(), settings = structuredClone(getSettings());
+    const messageId = Number($button.closest('.mes').attr('mesid')), message = context.chat[messageId];
+    if (!settings.enabled || !isAssistantSceneMessage(message)) return;
+    if (activeMessages.has(message)) { toastr.warning('此樓層仍有任務進行中，請先等待或停止。', 'Custom Text2Img'); return; }
+    if (inlineSlots(message).length) { toastr.info('此正文已有插圖按鈕，請直接點選；若要重新分析，先編輯正文移除舊標籤。', 'Custom Text2Img'); return; }
+    if (message.extra?.display_text != null) { toastr.warning('此樓層使用額外顯示文字，無法安全對應正文插圖位置。', 'Custom Text2Img'); return; }
+    const controller = new AbortController(), { signal } = controller;
+    activeMessages.set(message, controller); $button.addClass(BUSY_CLASS).addClass('fa-fade');
+    const chatId = context.getCurrentChatId(), text = message.mes, swipe = message.swipe_id;
+    const log = startLog('llm', messageId, settings);
+    const toast = createProgressToast('Custom Text2Img · 分析正文（不生圖）', () => controller.abort());
+    try {
+        log.add('start', '手動分析正文，準備多個插圖按鈕（不提交生圖）');
+        toast.update('請 LLM 規劃插圖位置與提示詞…');
+        const plan = await generatePrompt(messageId, message, signal, settings, log, true);
+        signal.throwIfAborted();
+        const current = SillyTavern.getContext();
+        if (current.getCurrentChatId() !== chatId || current.chat[messageId] !== message || message.mes !== text || message.swipe_id !== swipe) {
+            throw new Error('聊天或正文已變動，已捨棄插圖分析結果；未修改正文。');
+        }
+        message.extra ??= {};
+        message.extra[INLINE_KEY] = { version: 1, slots: plan.slots };
+        message.mes = plan.mes;
+        syncInlineSwipe(message);
+        current.updateMessageBlock(messageId, message);
+        renderMessageScenes(messageId);
+        await current.saveChat();
+        const afterSave = SillyTavern.getContext();
+        if (afterSave.getCurrentChatId() !== chatId || afterSave.chat[messageId] !== message || message.mes !== plan.mes || message.swipe_id !== swipe) {
+            throw new Error('等待 ST 保存時聊天或正文已變動；尚未確認原聊天已保存，請返回檢查，勿直接重整。');
+        }
+        log.add('complete', '插圖按鈕已插入，已請求 ST 保存；尚未提交任何生圖', { data: { count: plan.slots.length } });
+        toastr.success(`已插入 ${plan.slots.length} 個按鈕並請求 ST 保存。若 ST 提示保存失敗，請勿重整。請逐一點擊生成圖片。`, 'Custom Text2Img');
+    } catch (error) {
+        if (signal.aborted) log.add('stop', '已停止正文分析，未提交生圖。');
+        else { log.error('analysis', error); toastr.error(String(error?.message || error), '正文分析失敗', { escapeHtml: true }); }
+    } finally {
+        activeMessages.delete(message); $button.removeClass(BUSY_CLASS).removeClass('fa-fade');
+        toast.close(); renderMessageScenes(messageId);
+    }
+}
+
 /**
  * Generate an illustration for the given message and attach it.
  * @param {JQuery<HTMLElement>} $button
  */
-async function onMessageButtonClick($button) {
+async function onMessageButtonClick($button, slotId = null) {
     const buttonEl = $button.get(0);
     if (!buttonEl) return;
     const running = activeJobs.get(buttonEl);
@@ -490,6 +557,10 @@ async function onMessageButtonClick($button) {
     const title = `Custom Text2Img · ${novel ? 'NovelAI' : 'ComfyUI / Modal'}`;
     const messageId = Number($button.closest('.mes').attr('mesid'));
     const message = context.chat[messageId];
+    if (!isAssistantSceneMessage(message)) return;
+    if (activeMessages.has(message)) { toastr.warning('此樓層仍有任務進行中，請先等待或停止。', title); return; }
+    const slot = slotId === null ? null : inlineSlots(message).find(item => item.id === slotId);
+    if (slotId !== null && !slot) { toastr.warning('插圖標籤已失效，請重新分析正文。', title); return; }
     const log = startLog(novel ? 'novelai' : 'comfy-modal', messageId, settings);
     log.add('start', '開始生成插圖');
     if (!message || !String(message.mes ?? '').trim()) {
@@ -506,6 +577,8 @@ async function onMessageButtonClick($button) {
     const controller = new AbortController();
     const { signal } = controller;
     activeJobs.set(buttonEl, controller);
+    activeMessages.set(message, controller);
+    renderMessageScenes(messageId);
     $button.addClass(BUSY_CLASS).addClass('fa-fade');
     const chatIdAtStart = context.getCurrentChatId();
     const textAtStart = message.mes;
@@ -524,10 +597,10 @@ async function onMessageButtonClick($button) {
         const client = createImageClient(plan);
         await client.prepare(signal);
         signal.throwIfAborted();
-        update('llm', '正在請 AI 撰寫圖片提示詞…');
-        let prompt = await generatePrompt(messageId, message, signal, settings, log);
+        update(slot ? 'prompt' : 'llm', slot ? '使用此插圖標籤已保存的提示詞…' : '正在請 AI 撰寫圖片提示詞…');
+        let prompt = slot ? slot.prompt : await generatePrompt(messageId, message, signal, settings, log);
         if (prompt === null) { log.add('cancel', '已取消獨立提示詞對話，未送出生圖請求。'); return; }
-        if (settings.reviewPrompt || (settings.promptPresetMode === 'preset' && selectedLlmPreset(settings)?.interactive === true)) {
+        if (settings.reviewPrompt || (!slot && settings.promptPresetMode === 'preset' && selectedLlmPreset(settings)?.interactive === true)) {
             update('review', '等待檢視提示詞…');
             const edited = await reviewPrompt(prompt, settings.provider);
             signal.throwIfAborted();
@@ -547,6 +620,11 @@ async function onMessageButtonClick($button) {
             update('preset', '讀取面板預設組合…');
             payload = buildGeneratePayload(prompt, await loadSelectedPreset(signal, settings, client), settings);
         }
+        const beforeSubmit = SillyTavern.getContext();
+        if (beforeSubmit.getCurrentChatId() !== chatIdAtStart || beforeSubmit.chat[messageId] !== message
+            || message.mes !== textAtStart || message.swipe_id !== swipeAtStart
+            || (slot && !inlineSlots(message).includes(slot))) throw new Error('聊天或正文已變動，未送出生圖。');
+        signal.throwIfAborted();
         log.detail('image.request', '生圖提示詞與參數（插件提交內容）', payload);
         update('submit', '送出產圖請求（僅提交一次）…');
         const result = await generateImages(payload, signal, (event) => {
@@ -586,7 +664,7 @@ async function onMessageButtonClick($button) {
             const number = saved.length + 1;
             update('download', `讀取圖片 ${number}/${result.images.length}…`);
             const file = await client.output(path, signal);
-            const filename = `${characterName}_${context.humanizedDateTime()}_${saved.length}`;
+            const filename = `${characterName}_${context.humanizedDateTime()}_${slot ? `${slot.id}_` : ''}${saved.length}`;
             update('save', `儲存圖片 ${number}/${result.images.length} 到 ST…`);
             const url = await saveBase64AsFile(file.data, characterName, filename, file.format || 'png');
             saved.push(url);
@@ -597,7 +675,7 @@ async function onMessageButtonClick($button) {
         signal.throwIfAborted();
         const current = SillyTavern.getContext();
         if (chatIdAtStart !== current.getCurrentChatId() || current.chat[messageId] !== message
-            || message.mes !== textAtStart || message.swipe_id !== swipeAtStart) {
+            || message.mes !== textAtStart || message.swipe_id !== swipeAtStart || (slot && !inlineSlots(message).includes(slot))) {
             log.add('attach', '聊天或樓層已變動；圖片已儲存，但未附加到其他樓層。', { level: 'warn' });
             toastr.warning('聊天或樓層已變動；圖片已儲存，但未附加到其他樓層。', title);
             return;
@@ -605,10 +683,22 @@ async function onMessageButtonClick($button) {
         update('attach', '附加圖片並保存聊天…');
         attachImagesToMessage(messageId, saved, {
             title: prompt, negative: payload.negative_prompt ?? payload.negative_text ?? '', seed: result.seed, seeds,
+            inlineSceneId: slot?.id,
         });
+        if (slot) {
+            slot.images = saved;
+            slot.prompt = prompt;
+            syncInlineSwipe(message);
+            renderMessageScenes(messageId);
+        }
         await current.saveChat();
-        log.add('complete', `已為第 ${messageId} 樓生成並保存 ${saved.length} 張插圖。`);
-        toastr.success(`已為第 ${messageId} 樓生成 ${saved.length} 張插圖。`, title, { timeOut: 4000 });
+        const afterSave = SillyTavern.getContext();
+        if (afterSave.getCurrentChatId() !== chatIdAtStart || afterSave.chat[messageId] !== message
+            || message.mes !== textAtStart || message.swipe_id !== swipeAtStart) {
+            throw new Error('等待 ST 保存時聊天或正文已變動；圖片檔已保存，但聊天掛接尚未確認。請返回檢查，勿重新生圖。');
+        }
+        log.add('complete', `已為第 ${messageId} 樓生成 ${saved.length} 張插圖並請求 ST 保存聊天。`);
+        toastr.success(`已為第 ${messageId} 樓生成 ${saved.length} 張插圖並請求 ST 保存。若 ST 提示保存失敗，請勿重整或重新生圖。`, title, { timeOut: 6000 });
     } catch (error) {
         if (signal.aborted) {
             const warning = novel
@@ -624,7 +714,9 @@ async function onMessageButtonClick($button) {
         signal.removeEventListener('abort', onAbort);
         toast.close();
         activeJobs.delete(buttonEl);
+        activeMessages.delete(message);
         $button.removeClass(BUSY_CLASS).removeClass('fa-fade');
+        renderMessageScenes(messageId);
     }
 }
 
@@ -657,6 +749,7 @@ function attachImagesToMessage(messageId, urls, meta) {
             title: meta.title,
             negative: meta.negative,
             source: MEDIA_SOURCE.GENERATED,
+            ...(meta.inlineSceneId ? { cmi_scene_id: meta.inlineSceneId } : {}),
             seed: Array.isArray(meta.seeds) ? meta.seeds[index] ?? undefined : meta.seed ?? undefined,
         });
     }
@@ -675,29 +768,28 @@ function attachImagesToMessage(messageId, urls, meta) {
 // Message buttons
 // ---------------------------------------------------------------------------
 
-function buttonHtml() {
-    return `<div title="生成插圖（Custom Text2Img：ComfyUI / NovelAI）" class="mes_button ${BUTTON_CLASS} fa-solid fa-wand-magic-sparkles"></div>`;
+function buttonHtml(analyze = false) {
+    return analyze
+        ? `<div title="分析正文／插入生圖按鈕（只呼叫 LLM，不生圖）" role="button" tabindex="0" class="mes_button ${ANALYZE_CLASS} fa-solid fa-images"></div>`
+        : `<div title="生成插圖（Custom Text2Img：ComfyUI / NovelAI）" class="mes_button ${BUTTON_CLASS} fa-solid fa-wand-magic-sparkles"></div>`;
 }
 
 function ensureMessageButtons() {
-    const settings = getSettings();
-    const $template = $('#message_template .extraMesButtons');
+    const settings = getSettings(), chat = SillyTavern.getContext().chat;
+    const classes = `.${BUTTON_CLASS}, .${ANALYZE_CLASS}`;
+    const add = $target => {
+        if (!$target.find(`.${BUTTON_CLASS}`).length) $target.prepend(buttonHtml());
+        if (!$target.find(`.${ANALYZE_CLASS}`).length) $target.prepend(buttonHtml(true));
+    };
     if (settings.enabled) {
-        if ($template.length && !$template.find(`.${BUTTON_CLASS}`).length) {
-            $template.prepend(buttonHtml());
-        }
-        const chat = SillyTavern.getContext().chat;
+        add($('#message_template .extraMesButtons'));
         $('#chat .mes .extraMesButtons').each(function () {
             const message = chat[Number($(this).closest('.mes').attr('mesid'))];
-            if (!isAssistantSceneMessage(message)) {
-                $(this).find(`.${BUTTON_CLASS}`).remove();
-                return;
-            }
-            if (!$(this).find(`.${BUTTON_CLASS}`).length) $(this).prepend(buttonHtml());
+            if (!isAssistantSceneMessage(message)) { $(this).find(classes).remove(); return; }
+            add($(this));
         });
-    } else {
-        $(`.${BUTTON_CLASS}`).remove();
-    }
+    } else $(classes).remove();
+    $('#chat .mes').each(function () { renderMessageScenes(Number($(this).attr('mesid'))); });
 }
 
 // ---------------------------------------------------------------------------
@@ -1070,6 +1162,8 @@ function loadSettingsIntoUi() {
     validateManualHeaders();
     $('#cmi_max_tokens').val(settings.maxTokens);
     $('#cmi_history_depth').val(settings.historyDepth);
+    $('#cmi_inline_max_scenes').val(settings.inlineMaxScenes);
+    $('#cmi_inline_max_tokens').val(settings.inlineMaxTokens);
     $('#cmi_system_prompt').val(settings.systemPrompt);
     $('#cmi_user_template').val(settings.userTemplate);
     refreshLlmPresetOptions();
@@ -1160,6 +1254,8 @@ function bindSettingsUi() {
     $('#cmi_llm_preset_delete').on('click', deleteLlmPreset);
     bindText('#cmi_max_tokens', 'maxTokens', (v) => Math.max(16, Number(v) || defaultSettings.maxTokens));
     bindText('#cmi_history_depth', 'historyDepth', (v) => Math.max(0, Number(v) || 0));
+    bindText('#cmi_inline_max_scenes', 'inlineMaxScenes', sceneLimit);
+    bindText('#cmi_inline_max_tokens', 'inlineMaxTokens', v => Math.min(8192, Math.max(256, Number(v) || INLINE_DEFAULTS.inlineMaxTokens)));
     bindText('#cmi_system_prompt', 'systemPrompt', (v) => String(v));
     bindText('#cmi_user_template', 'userTemplate', (v) => String(v));
     bindCheckbox('#cmi_review_prompt', 'reviewPrompt');
@@ -1219,7 +1315,28 @@ async function init() {
         onMessageButtonClick($(this));
     });
 
+    $(document).on('click', `.${ANALYZE_CLASS}, .cmi-inline-generate`, function (event) {
+        // A rendered LLM tag is passive. Only a real user gesture may submit work.
+        if (!event.originalEvent?.isTrusted) return;
+        event.preventDefault(); event.stopPropagation();
+        if ($(this).hasClass(ANALYZE_CLASS)) void onAnalyzeButtonClick($(this));
+        else if (isInlineControl(this)) void onMessageButtonClick($(this), $(this).closest('.cmi-inline-scene').attr('data-cmi-scene'));
+    });
+    $(document).on('keydown', `.${ANALYZE_CLASS}`, function (event) {
+        if (event.originalEvent?.isTrusted && ['Enter', ' '].includes(event.key)) {
+            event.preventDefault(); void onAnalyzeButtonClick($(this));
+        }
+    });
     ensureMessageButtons();
+    // Covers pagination, message edits, regex rerenders and swipe DOM replacement.
+    // Rendering is idempotent and never invokes an API.
+    let renderScheduled = false;
+    const chatRoot = document.getElementById('chat');
+    if (chatRoot) new MutationObserver(() => {
+        if (renderScheduled) return;
+        renderScheduled = true;
+        requestAnimationFrame(() => { renderScheduled = false; ensureMessageButtons(); });
+    }).observe(chatRoot, { childList: true, subtree: true, characterData: true });
     const { eventSource, event_types } = context;
     eventSource.on(event_types.APP_READY, () => {
         ensureMessageButtons();

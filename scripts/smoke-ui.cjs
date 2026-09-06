@@ -181,9 +181,9 @@ async function main() {
                 const body = request.postDataJSON();
                 assert.equal(body.image, PNG_BASE64); assert.equal(body.format, 'png');
                 uploads.push(body);
-                return route.fulfill({ status: 200, json: { path: `/__custom-text2img-fixture__/image-${uploads.length}.png` } });
+                return route.fulfill({ status: 200, json: { path: `/user/images/__cmi_fixture__/Browser fixture/image-${uploads.length}.png` } });
             }
-            if (target.pathname.startsWith('/__custom-text2img-fixture__/')) return route.fulfill({ status: 200, contentType: 'image/png', body: PNG_BYTES });
+            if (target.pathname.startsWith('/user/images/__cmi_fixture__/')) return route.fulfill({ status: 200, contentType: 'image/png', body: PNG_BYTES });
             // The built-in image extension reads local workflow names at startup;
             // this POST is read-only, unlike the other blocked /api/sd routes.
             if (target.pathname === '/api/sd/comfy/workflows') return route.fulfill({ status: 200, json: [] });
@@ -218,13 +218,13 @@ async function main() {
                     getCurrentChatId: () => 'browser-only-fixture', getCharacterCardFields: () => ({ description: 'A traveler in a forest.' }),
                     characters: [{ name: 'Browser fixture', description: 'A traveler in a forest.' }],
                     CONNECT_API_MAP: { ...context.CONNECT_API_MAP, 'fixture-cc': { selected: 'openai' } },
-                    saveChat: async () => { window.__cmiSmoke.savedChats++; },
+                    saveChat: async () => { window.__cmiSmoke.savedChats++; window.__cmiSmoke.savedMessage = structuredClone(original().chat[0]); },
                     ConnectionManagerRequestService: {
                         isProfileSupported: () => true,
                         sendRequest: async (id, messages, maxTokens, options, parameters) => {
                             if (!options.includePreset) throw new Error('Trusted profile preset was lost');
                             window.__cmiSmoke.promptRequests.push({ messages, maxTokens, parameters, includeInstruct: options.includeInstruct });
-                            window.__cmiSmoke.promptProfiles.push(id); return { content: 'landscape, sunrise' };
+                            window.__cmiSmoke.promptProfiles.push(id); return { content: window.__cmiPlanReply || 'landscape, sunrise' };
                         },
                     },
                 });
@@ -354,8 +354,6 @@ async function main() {
         assert.deepEqual(generatedRequest.messages, [
             { role: 'system', content: 'Illustrate Browser fixture: A traveler in a forest.' },
             { role: 'assistant', content: 'A traveler watches sunrise over a forest clearing.' },
-            { role: 'user', content: 'DEPTH OFF' },
-            { role: 'user', content: 'Output tags only' },
             { role: 'model', content: 'landscape,' },
             { role: 'system', content: 'PROMPT OFF' },
         ]);
@@ -372,7 +370,7 @@ async function main() {
         const detailedLogs = await page.locator('#cmi_log_output').textContent();
         assert.match(detailedLogs, /llm.request/); assert.match(detailedLogs, /llm.response/);
         assert.match(detailedLogs, /Illustrate Browser fixture/);
-        assert.match(detailedLogs, /PROMPT OFF/); assert.match(detailedLogs, /DEPTH OFF/);
+        assert.match(detailedLogs, /PROMPT OFF/); assert.doesNotMatch(detailedLogs, /DEPTH OFF|Output tags only/);
         for (const secret of [token, phrase, password, 'browser-smoke-manual-key', PANEL_TOKEN, PNG_BASE64]) assert.ok(!detailedLogs.includes(secret));
         await page.locator('#cmi_log_filter').selectOption('debug');
         assert.equal(await page.locator('#cmi_log_output .cmi-log-info').count(), 0);
@@ -471,6 +469,82 @@ async function main() {
         assert.equal(await page.locator('#cmi_log_output pre').count(), 0);
         await page.locator('#cmi_provider').selectOption('novelai');
         await page.locator('#cmi_settings').screenshot({ path: path.join(outputDir, `ui-smoke-${layout}.png`) });
+        // Multi-scene planning is manual and independent of image submission.
+        await page.locator('#cmi_provider').selectOption('comfy-modal');
+        if (await page.locator('#rm_extensions_block').isVisible()) await page.locator('#extensions-settings-button > .drawer-toggle').click();
+        await page.evaluate(() => {
+            const context = SillyTavern.getContext(), message = context.chat[0];
+            window.__cmiPlanReply = JSON.stringify({ scenes: [
+                { after: '**A traveler enters the forest.**', label: 'Forest <img src=x onerror=alert(1)>', prompt: '1girl, forest, walking' },
+                { after: 'Sunset lights the lake.', label: 'Lake', prompt: 'lake, sunset' },
+            ] });
+            message.mes = '**A traveler enters the forest.**\n\nSunset lights the lake.';
+            message.extra = {}; message.swipes = [message.mes, 'OTHER SWIPE']; message.swipe_info = [{}, { extra: {} }];
+            context.updateMessageBlock(0, message);
+            context.eventSource.emit(context.event_types.MESSAGE_UPDATED, 0);
+        });
+        const floor = page.locator('#chat .mes[mesid="0"]');
+        if (!(await floor.locator('.cmi_message_analyze').isVisible())) await floor.locator('.extraMesButtonsHint').click();
+        const promptCount = await page.evaluate(() => window.__cmiSmoke.promptRequests.length);
+        const chatsBeforePlan = await page.evaluate(() => window.__cmiSmoke.savedChats);
+        await floor.locator('.cmi_message_analyze').evaluate(button => button.click());
+        assert.equal(await page.evaluate(() => window.__cmiSmoke.promptRequests.length), promptCount, 'Synthetic analysis clicks do not call the LLM');
+        await floor.locator('.cmi_message_analyze').click();
+        await page.waitForFunction(() => document.querySelectorAll('#chat .cmi-inline-generate').length === 2 && !document.querySelector('#chat .cmi-inline-generate').disabled);
+        assert.equal(panelSubmissions.length, 1, 'Analysis only creates buttons, no image request');
+        assert.equal(await page.evaluate(() => window.__cmiSmoke.promptRequests.length), promptCount + 1);
+        assert.equal(await floor.locator('.mes_text strong').textContent(), 'A traveler enters the forest.');
+        assert.equal(await floor.locator('.cmi-inline-scene img').count(), 0, 'LLM label HTML must remain text');
+        await floor.locator('.cmi-inline-generate').first().evaluate(button => button.click());
+        assert.equal(panelSubmissions.length, 1, 'Synthetic image clicks do not submit');
+        await page.evaluate(() => toastr.remove());
+        for (let scene = 0; scene < 2; scene++) {
+            await floor.locator('.cmi-inline-generate').nth(scene).click();
+            await page.waitForFunction(index => SillyTavern.getContext().chat[0].extra.cmi_inline_scenes.slots[index].images.length === 2, scene);
+            await page.waitForFunction(() => !document.querySelector('#chat .cmi-inline-generate').disabled);
+            assert.equal(panelSubmissions.length, scene + 2);
+            assert.match(panelSubmissions.at(-1).prompt_text, scene ? /lake, sunset/ : /1girl, forest, walking/);
+            assert.equal(await page.evaluate(() => window.__cmiSmoke.promptRequests.length), promptCount + 1, 'Stored scene prompts do not recall the LLM');
+            await page.evaluate(() => toastr.remove());
+        }
+        await page.waitForFunction(() => [...document.querySelectorAll('#chat .cmi-inline-scene img')].every(image => image.complete && image.naturalWidth));
+        assert.equal(await floor.locator('.cmi-inline-scene img').count(), 4);
+        const persisted = await page.evaluate(() => JSON.parse(JSON.stringify(window.__cmiSmoke.savedMessage)));
+        savedChats += (await page.evaluate(() => window.__cmiSmoke.savedChats)) - chatsBeforePlan;
+        assert.equal(savedChats, 6, 'Each plan and image slot requests a chat save');
+        assert.equal(persisted.swipes[0], persisted.mes);
+        assert.equal(persisted.swipe_info[0].extra.cmi_inline_scenes.slots[1].images.length, 2);
+        await page.setViewportSize({ width: 390, height: 844 });
+        await floor.screenshot({ path: path.join(outputDir, `ui-inline-scenes-mobile-${layout}.png`) });
+        assert.equal(await floor.locator('.cmi-inline-scene').first().evaluate(el => el.scrollWidth <= el.clientWidth + 1), true);
+        await page.setViewportSize({ width: 1440, height: 1080 });
+        // Native swipe replacement and disabled-extension rendering are passive.
+        await page.evaluate(() => {
+            const context = SillyTavern.getContext(), message = context.chat[0];
+            message.swipe_id = 1; message.mes = message.swipes[1]; message.extra = structuredClone(message.swipe_info[1].extra);
+            context.updateMessageBlock(0, message); context.eventSource.emit(context.event_types.MESSAGE_SWIPED, 0);
+        });
+        await page.waitForFunction(() => !document.querySelector('#chat .cmi-inline-generate'));
+        const restore = async () => page.evaluate(message => {
+            const context = SillyTavern.getContext(); context.chat[0] = message;
+            context.updateMessageBlock(0, message); context.eventSource.emit(context.event_types.CHAT_CHANGED);
+        }, persisted);
+        await restore();
+        await page.waitForFunction(() => document.querySelectorAll('#chat .cmi-inline-generate').length === 2);
+        await page.evaluate(() => {
+            const context = SillyTavern.getContext(); context.extensionSettings.sillytavern_custom_text2img.enabled = false;
+            context.eventSource.emit(context.event_types.CHAT_CHANGED);
+        });
+        await page.waitForFunction(() => !document.querySelector('#chat .cmi-inline-generate'));
+        assert.equal(await floor.locator('.mes_text').textContent().then(text => text.includes('[[cmi-image:')), true);
+        await page.evaluate(() => { const context = SillyTavern.getContext(); context.extensionSettings.sillytavern_custom_text2img.enabled = true; context.eventSource.emit(context.event_types.CHAT_CHANGED); });
+        await page.waitForFunction(() => document.querySelectorAll('#chat .cmi-inline-generate').length === 2);
+        // Reload the browser modules and restore the serialized chat fixture, never real user chat.
+        await page.reload({ waitUntil: 'domcontentloaded' }); await page.locator('#cmi_settings').waitFor({ state: 'attached' });
+        await fixtureChat(); await restore();
+        await page.waitForFunction(() => document.querySelectorAll('#chat .cmi-inline-scene img').length === 4);
+        assert.equal(panelSubmissions.length, 3, 'Swiping, disabling, enabling and reload never submit images');
+        assert.equal(await page.evaluate(() => window.__cmiSmoke.promptRequests.length), 0, 'Reload never calls the LLM');
         const manifest = await page.evaluate(async prefix => (await fetch(prefix + 'manifest.json')).json(), extensionPrefix);
         assert.equal(manifest.version, require('../package.json').version);
         const entry = new URL(extensionPrefix + manifest.js, url.origin);

@@ -1,4 +1,5 @@
 import { boundedText, compileRegex } from './preset-regex.js';
+import { stripSceneMarkers } from './inline-scenes.js';
 
 // Editable data, not a hardcoded requirement for a particular story wrapper.
 export const DEFAULT_BODY_CLEANUP = JSON.stringify([
@@ -30,7 +31,7 @@ export function isAssistantSceneMessage(message) {
 export function snapshotScene(chat, messageId, depth) {
     const visible = chat.slice(0, messageId + 1).map((message, id) => ({ message, id }))
         .filter(({ message }) => isAssistantSceneMessage(message) && String(message.mes ?? '').trim());
-    const pack = entry => ({ id: entry.id, role: 'assistant', name: String(entry.message.name ?? ''), text: String(entry.message.mes ?? '') });
+    const pack = entry => ({ id: entry.id, role: 'assistant', name: String(entry.message.name ?? ''), text: stripSceneMarkers(entry.message.mes) });
     const target = visible.find(entry => entry.id === messageId);
     if (!target) throw new Error('找不到可讀取的 assistant 目標樓層。');
     return { target: pack(target), history: visible.slice(-Math.min(51, Math.max(1, Math.floor(Number(depth) || 0) + 1))).map(pack),

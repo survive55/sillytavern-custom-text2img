@@ -55,7 +55,10 @@ export function preparePresetRequest(previous, userText = null) {
     boundedText(JSON.stringify(messages));
     state.macroState = macros.snapshot();
     state.warnings = [...new Set([...state.warnings, ...macros.warnings])].slice(0, 100);
-    return { state, messages };
+    // Planner anchors must use exactly the same raw/prompt-filtered target as the
+    // preset, never a fresh body-cleanup-only snapshot that could reintroduce text.
+    const sceneBody = processed.find(item => item.id === state.scene.target.id)?.text ?? '';
+    return { state, messages, sceneBody };
 }
 export function acceptPresetResponse(previous, content) {
     const state = structuredClone(previous), rules = state.preset.extensions?.regex_scripts ?? [];

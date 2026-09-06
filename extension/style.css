@@ -160,3 +160,10 @@
 .cmi-conversation-script-controls { padding: 8px; border: 1px solid #cb9f51; margin: 8px 0; }
 .cmi-conversation-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .cmi-preset-frame { display: block; width: 100%; height: 480px; max-height: 700px; border: 1px solid #888; background: white; margin: 10px 0; }
+
+.cmi-inline-scene { display: block; max-width: 100%; margin: 10px 0; }
+.cmi-inline-scene .cmi-inline-generate { display: inline-flex; width: auto; height: auto; max-width: 100%; white-space: normal; overflow-wrap: anywhere; padding: 8px 12px; text-align: left; }
+.cmi-inline-scene .cmi-inline-generate:disabled { opacity: 0.55; cursor: wait; }
+.cmi-inline-scene img { display: block; max-width: 100%; max-height: 75vh; object-fit: contain; margin: 8px 0; border-radius: 6px; }
+.cmi-inline-settings { margin: 10px 0; padding: 8px; border: 1px solid var(--SmartThemeBorderColor); border-radius: 6px; }
+.cmi_message_analyze.cmi_busy { color: var(--active, #6fbf73); }

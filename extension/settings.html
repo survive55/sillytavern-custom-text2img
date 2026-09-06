@@ -186,6 +186,12 @@
                         <small class="cmi-hint">原生 extensions.regex_scripts 只在此預設內依開關、深度和用途處理；不讀取主聊天／全域正則，不混用 SPreset。預設巨集變數在每次生圖對話中獨立。互動 HTML 先以靜態預覽顯示，JS 需於面板內明確啟用；送出仍需插件按鈕確認，生圖另行確認。</small>
                         <small class="cmi-hint">不執行世界書掃描、酒館助手腳本、STscript、工具或完整聊天生成流程。HTML 腳本只支援有限的獨立輸入框／送出相容介面，不提供主聊天 API；未支援巨集保留為文字並警告。舊版匯入未保存正則，請重新匯入原始 JSON。</small>
                     </div>
+                    <details class="cmi-inline-settings"><summary>正文多插圖（全手動）</summary>
+                        <p>樓層「⋯」→「分析正文／插入生圖按鈕」（多圖圖示）：只請 LLM 規劃場景，不生圖。再逐一點擊正文按鈕，才向目前圖片來源提交該場景；每個位置沿用圖片批次設定。</p>
+                        <label for="cmi_inline_max_scenes">每則正文最多插圖位置（1–6）</label><input id="cmi_inline_max_scenes" class="text_pole" type="number" min="1" max="6" step="1" />
+                        <label for="cmi_inline_max_tokens">正文分析回應 token 上限（取代此次 LLM 預設的回應上限）</label><input id="cmi_inline_max_tokens" class="text_pole" type="number" min="256" max="8192" step="1" />
+                        <small class="cmi-hint">沿用所選 LLM 模板／預設、連線與正文清理，另加 JSON 場景規劃指令；此操作不開啟 HTML 互動面板。使用能輸出 JSON 的預設；提示詞輸出正則若破壞 JSON，會安全停止。正文只插入 [[cmi-image:ID]] 標籤，不讓 LLM 改寫原文。分析可能產生 LLM 費用，點生圖才產生圖片費用；顯示、重整、切換聊天不自動生圖。</small>
+                    </details>
                     <label for="cmi_max_tokens">最大回應 token 數（原模板／LLM 預設未指定時）</label><input id="cmi_max_tokens" class="text_pole" type="number" min="16" max="4096" step="1" />
                     <label for="cmi_history_depth">附帶 assistant 正文樓層數（Chat History / <code>\{{history}}</code>，0 = 只有目標樓層）</label><input id="cmi_history_depth" class="text_pole" type="number" min="0" max="50" step="1" />
                     <small class="cmi-hint">只讀取被點選樓層及之前的 assistant 訊息 mes，不讀主聊天 user 樓層、extra.reasoning 或畫面 HTML。lastUserMessage 在讀取主聊天時為空；獨立面板自己的 user 對話正常保留。</small>

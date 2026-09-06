@@ -11,6 +11,7 @@ import { createManualLlmClient, parseExtraHeaders } from '../manual-llm.js';
 import { encryptToken, decryptToken } from '../token-vault.js';
 import * as llmPresets from '../llm-presets.js';
 import * as sceneText from '../scene-text.js';
+import * as inlineScenes from '../inline-scenes.js';
 import { createPresetState, preparePresetRequest, acceptPresetResponse } from '../preset-runtime.js';
 
 // Exercise real pure worker operations here; browser smoke verifies actual Worker isolation.
@@ -34,7 +35,7 @@ const source = fs.readFileSync(new URL('../index.js', import.meta.url), 'utf8')
 assert.ok(!source.includes('init().catch'));
 
 function fixture({ provider = 'novelai', configured = true, onSubmit = () => {}, replyError = false, review = false,
-    conversation = async ({ initial }) => initial.prompt } = {}) {
+    conversation = async ({ initial }) => initial.prompt, manualReply = 'manual landscape, sunrise' } = {}) {
     const calls = [], saves = [], notifications = [], prompts = [], reviews = [];
     const settings = { ...PROVIDER_DEFAULTS, provider, enabled: true, promptConnectionMode: 'profile', profileId: 'independent', reviewPrompt: review,
         manualLlmBaseUrl: 'https://llm.example/v1', manualLlmPath: 'chat/completions', manualLlmModel: 'manual-model',
@@ -49,7 +50,7 @@ function fixture({ provider = 'novelai', configured = true, onSubmit = () => {},
         saveSettingsDebounced() {}, getRequestHeaders: () => ({ 'Content-Type': 'application/json' }),
         getCharacterCardFields: () => ({ description: 'A traveler in the forest.' }), substituteParamsExtended: text => text,
         getCurrentChatId: () => 'test-chat', humanizedDateTime: () => 'test-date',
-        saveChat: async () => { savedChats++; }, appendMediaToMessage: () => { rendered++; },
+        saveChat: async () => { savedChats++; }, appendMediaToMessage: () => { rendered++; }, updateMessageBlock() {},
         POPUP_TYPE: { INPUT: 'input' }, callGenericPopup: async (html, _type, prompt) => { reviews.push(html); return `${prompt}, edited`; },
         ConnectionManagerRequestService: {
             isProfileSupported: () => true,
@@ -60,7 +61,7 @@ function fixture({ provider = 'novelai', configured = true, onSubmit = () => {},
         const body = init?.body ? JSON.parse(init.body) : {};
         calls.push({ url, body, init });
         if (url.endsWith('/api/browser/login')) return panelLogin();
-        if (url.endsWith('/chat/completions')) return Response.json({ choices: [{ message: { content: 'manual landscape, sunrise' } }] });
+        if (url.endsWith('/chat/completions')) return Response.json({ choices: [{ message: { content: manualReply } }] });
         if (url.endsWith('/presets/read-only')) return Response.json({ prompts: { positive: 'masterpiece', negative: 'blurry' }, loras: [{ name: 'test-lora' }] });
         if (url.endsWith('/generate/jobs') || url.endsWith('/ai/generate-image')) {
             onSubmit(context);
@@ -77,7 +78,7 @@ function fixture({ provider = 'novelai', configured = true, onSubmit = () => {},
     const button = { get: () => element, addClass() { return this; }, removeClass() { return this; }, closest: () => ({ attr: () => String(context.chat.indexOf(message)) }) };
     const toast = { find: () => ({ text() {} }) };
     const sandbox = {
-        console, structuredClone, AbortController, AbortSignal, URL, ...llmPresets, ...sceneText, runPresetTask, createLogStore, logSecrets,
+        console, structuredClone, AbortController, AbortSignal, URL, ...llmPresets, ...sceneText, ...inlineScenes, runPresetTask, createLogStore, logSecrets,
         showPresetConversation: conversation,
         SillyTavern: { getContext: () => context }, $: () => ({ length: 1 }),
         toastr: Object.fromEntries(['info', 'warning', 'error', 'success', 'clear'].map(kind => [kind, (...args) => { notifications.push({ kind, args }); return toast; }])),
@@ -90,8 +91,8 @@ function fixture({ provider = 'novelai', configured = true, onSubmit = () => {},
     };
     vm.runInNewContext(`${source}\ngetSettings(); novelSessionToken = ${JSON.stringify(configured ? 'fake-novel-token' : '')};
         unlockedVaultFingerprint = JSON.stringify(getSettings().novelVault); novelSessionMode = 'memory';
-        globalThis.api = { onMessageButtonClick, listProfiles, logs };`, sandbox, { filename: 'extension/index.js' });
-    return { logs: sandbox.api.logs, run: () => sandbox.api.onMessageButtonClick(button), profiles: () => sandbox.api.listProfiles(), close: () => api.close(), context, message, settings, calls, saves, notifications, prompts, reviews,
+        globalThis.api = { onMessageButtonClick, onAnalyzeButtonClick, listProfiles, logs };`, sandbox, { filename: 'extension/index.js' });
+    return { logs: sandbox.api.logs, run: slot => sandbox.api.onMessageButtonClick(button, slot), analyze: () => sandbox.api.onAnalyzeButtonClick(button), profiles: () => sandbox.api.listProfiles(), close: () => api.close(), context, message, settings, calls, saves, notifications, prompts, reviews,
         get savedChats() { return savedChats; }, get rendered() { return rendered; } };
 }
 
@@ -366,6 +367,143 @@ for (const mode of ['template', 'preset']) {
         });
     }
 }
+
+const inlineBody = 'A traveler enters the forest.\n\nSunset lights the lake.';
+const inlineReply = JSON.stringify({ scenes: [
+    { after: 'A traveler enters the forest.', label: 'Forest', prompt: '1girl, forest, walking' },
+    { after: 'Sunset lights the lake.', label: 'Lake', prompt: 'lake, sunset' },
+] });
+function inlineFixture(options) {
+    const f = fixture(options);
+    f.message.mes = inlineBody;
+    f.message.swipes = [inlineBody, 'OTHER SWIPE'];
+    f.message.swipe_info = [{}, { extra: { untouched: true } }];
+    f.context.ConnectionManagerRequestService.sendRequest = async (...args) => { f.prompts.push(args); return inlineReply; };
+    return f;
+}
+
+test('manual analysis has no image-provider dependency; two slot clicks each submit only their stored prompt', async t => {
+    const f = inlineFixture(); t.after(f.close);
+    await f.analyze();
+    assert.equal(f.prompts.length, 1); assert.equal(f.calls.length, 0); assert.equal(f.saves.length, 0);
+    assert.equal(f.savedChats, 1); assert.equal(f.prompts[0][2], 2400);
+    assert.match(f.prompts[0][1].at(-1).content, /ILLUSTRATION PLAN TASK/);
+    const slots = f.message.extra[inlineScenes.INLINE_KEY].slots;
+    assert.equal(slots.length, 2); assert.equal(f.message.swipes[0], f.message.mes);
+    assert.equal(f.message.swipes[1], 'OTHER SWIPE');
+    await f.run(slots[0].id);
+    assert.equal(f.prompts.length, 1, 'Clicking a planned image never calls the LLM again');
+    assert.equal(slots[0].images.length, 2); assert.equal(slots[1].images.length, 0);
+    assert.equal(f.message.extra.media[0].title, '1girl, forest, walking');
+    assert.equal(f.message.extra.media[0].cmi_scene_id, slots[0].id);
+    await f.run(slots[1].id);
+    assert.equal(f.prompts.length, 1); assert.equal(slots[1].images.length, 2);
+    assert.equal(f.message.extra.media[2].title, 'lake, sunset');
+    assert.equal(f.calls.filter(call => call.url.endsWith('/ai/generate-image')).length, 2);
+    assert.equal(f.message.swipe_info[0].extra[inlineScenes.INLINE_KEY].slots[1].images.length, 2);
+    await f.analyze(); assert.equal(f.prompts.length, 1, 'Existing plans are not silently overwritten');
+    await f.run('unknown'); assert.equal(f.calls.filter(call => call.url.endsWith('/ai/generate-image')).length, 2);
+});
+
+test('analysis works without an unlocked image token and respects imported preset without launching HTML', async t => {
+    const f = inlineFixture({ configured: false, conversation: async () => { assert.fail('Analysis must not launch an HTML conversation'); } }); t.after(f.close);
+    const imported = llmPresets.importLlmPreset(JSON.stringify({ main_prompt: 'PRESET STYLE {{message}}', openai_max_tokens: 700 }));
+    Object.assign(f.settings, { promptPresetMode: 'preset', llmPresetId: 'inline', llmPresets: [{ id: 'inline', ...imported, interactive: true }], inlineMaxTokens: 3200 });
+    f.context.CONNECT_API_MAP = { cc: { selected: 'openai' } }; f.context.extensionSettings.connectionManager.profiles[0].api = 'cc';
+    await f.analyze();
+    assert.equal(f.prompts.length, 1); assert.equal(f.prompts[0][2], 3200);
+    assert.match(JSON.stringify(f.prompts[0][1]), /PRESET STYLE/);
+    assert.equal(inlineScenes.inlineSlots(f.message).length, 2); assert.equal(f.calls.length, 0);
+});
+
+for (const presetMode of ['template', 'preset']) {
+    test(`${presetMode}: manual API planning uses dedicated token budget and never submits images`, async t => {
+        const f = inlineFixture({ manualReply: inlineReply, configured: false }); t.after(f.close);
+        Object.assign(f.settings, { promptConnectionMode: 'manual', promptPresetMode: presetMode, inlineMaxTokens: 2800 });
+        if (presetMode === 'preset') {
+            const imported = llmPresets.importLlmPreset(JSON.stringify({ main_prompt: 'STYLIZED', openai_max_tokens: 700 }));
+            Object.assign(f.settings, { llmPresetId: 'manual', llmPresets: [{ id: 'manual', ...imported }] });
+        }
+        await f.analyze();
+        assert.equal(f.prompts.length, 0); assert.equal(f.calls.length, 1); assert.equal(f.calls[0].body.max_tokens, 2800);
+        assert.match(f.calls[0].body.messages.at(-1).content, /ILLUSTRATION PLAN TASK/);
+        assert.equal(inlineScenes.inlineSlots(f.message).length, 2); assert.equal(f.saves.length, 0);
+    });
+}
+
+test('planner target obeys preset raw/prompt filters and never reintroduces excluded text', async t => {
+    const f = inlineFixture(); t.after(f.close);
+    f.message.mes += '\n<private>HIDDEN_BY_PRESET</private>';
+    const imported = llmPresets.importLlmPreset(JSON.stringify({ main_prompt: 'Plan {{message}}', extensions: { regex_scripts: [
+        { id: 'privacy', scriptName: 'privacy', findRegex: '<private>[\\s\\S]*?</private>', replaceString: '', placement: [2], promptOnly: true, markdownOnly: false, disabled: false },
+    ] } }));
+    Object.assign(f.settings, { promptPresetMode: 'preset', llmPresetId: 'filtered', llmPresets: [{ id: 'filtered', ...imported }] });
+    f.context.CONNECT_API_MAP = { cc: { selected: 'openai' } }; f.context.extensionSettings.connectionManager.profiles[0].api = 'cc';
+    await f.analyze();
+    assert.equal(f.prompts.length, 1); assert.doesNotMatch(JSON.stringify(f.prompts[0][1]), /HIDDEN_BY_PRESET/);
+    assert.match(f.message.mes, /HIDDEN_BY_PRESET/, 'Original text is never rewritten');
+    assert.equal(inlineScenes.inlineSlots(f.message).length, 2);
+});
+
+for (const change of ['text', 'chat', 'swipe', 'message', 'invalid-json']) {
+    test(`analysis discards ${change} results without inserting anything or submitting images`, async t => {
+        const f = inlineFixture(); t.after(f.close);
+        f.context.ConnectionManagerRequestService.sendRequest = async () => {
+            if (change === 'text') f.message.mes += ' edited';
+            if (change === 'chat') f.context.getCurrentChatId = () => 'OTHER';
+            if (change === 'swipe') f.message.swipe_id = 1;
+            if (change === 'message') f.context.chat[0] = { ...f.message };
+            return change === 'invalid-json' ? 'not JSON' : inlineReply;
+        };
+        await f.analyze();
+        assert.equal(inlineScenes.inlineSlots(f.message).length, 0); assert.equal(f.calls.length, 0);
+        assert.equal(f.savedChats, 0); assert.doesNotMatch(f.message.mes, /cmi-image/);
+    });
+}
+
+test('save wait chat switches are not reported as successful persistence and retain the in-memory plan', async t => {
+    const f = inlineFixture(); t.after(f.close);
+    f.context.saveChat = async () => { f.context.getCurrentChatId = () => 'OTHER'; };
+    await f.analyze();
+    assert.equal(inlineScenes.inlineSlots(f.message).length, 2);
+    assert.equal(f.notifications.some(item => item.kind === 'success'), false);
+    assert.equal(f.logs.getEntries().some(entry => entry.stage === 'complete'), false);
+    assert.match(f.notifications.find(item => item.kind === 'error').args[0], /勿直接重整/);
+    assert.equal(f.calls.length, 0);
+});
+
+test('explicit save errors keep the plan for recovery and do not retry the LLM or image API', async t => {
+    const f = inlineFixture(); t.after(f.close);
+    f.context.saveChat = async () => { throw new Error('ST save failed'); };
+    await f.analyze();
+    assert.equal(inlineScenes.inlineSlots(f.message).length, 2);
+    assert.equal(f.prompts.length, 1); assert.equal(f.calls.length, 0);
+    assert.equal(f.notifications.some(item => item.kind === 'success'), false);
+});
+
+test('rerendered competing controls cannot double-submit while analysis is waiting', async t => {
+    const f = inlineFixture(); t.after(f.close);
+    f.context.ConnectionManagerRequestService.sendRequest = async () => {
+        await f.analyze(); await f.run(); return inlineReply;
+    };
+    await f.analyze(); assert.equal(f.calls.length, 0); assert.equal(f.savedChats, 1);
+});
+
+test('editing during prompt review cancels before a paid image submission', async t => {
+    const f = inlineFixture({ review: true }); t.after(f.close);
+    await f.analyze();
+    f.context.callGenericPopup = async () => { f.message.mes += ' edited'; return 'new prompt'; };
+    await f.run(inlineScenes.inlineSlots(f.message)[0].id);
+    assert.equal(f.calls.filter(call => call.url.endsWith('/ai/generate-image')).length, 0);
+});
+
+test('swiping during a slot image task saves files but never attaches them to a different swipe', async t => {
+    const f = inlineFixture({ onSubmit: context => { context.chat[0].swipe_id = 1; } }); t.after(f.close);
+    await f.analyze();
+    const slot = inlineScenes.inlineSlots(f.message)[0]; await f.run(slot.id);
+    assert.equal(f.saves.length, 2); assert.equal(slot.images.length, 0); assert.equal(f.message.extra.media, undefined);
+    assert.equal(f.savedChats, 1);
+});
 
 for (const provider of ['novelai', 'comfy-modal']) {
     test(`${provider}: a lost submit response is not retried and errors are rendered as text`, async t => {
