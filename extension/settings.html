@@ -10,6 +10,24 @@
                 <input id="cmi_enabled" type="checkbox" />
                 <span>啟用（在每個樓層顯示「生成插圖」按鈕）</span>
             </label>
+            <details id="cmi_log_panel" class="cmi-section cmi-log-panel">
+                <summary><b>生成／運行日誌</b> <small id="cmi_log_summary"></small></summary>
+                <small class="cmi-hint">即時記錄本擴充的流程與錯誤，僅保留於目前分頁（最多 500 筆／約 1 Mi 字元；單筆過長會截斷）。重整即清空，不寫入聊天或設定。這不是 GPU 伺服器的完整終端日誌；NovelAI 不提供逐步取樣進度。</small>
+                <label class="checkbox_label" for="cmi_log_detail"><input id="cmi_log_detail" type="checkbox" /><span>詳細模式：記錄後續 LLM 訊息／回覆與生圖提示詞、參數</span></label>
+                <small class="cmi-hint">詳細紀錄可能包含角色與聊天內容。憑證會遮蔽、不記錄圖片 base64；分享前仍請檢查。關閉詳細模式不刪除已記錄的內容；重整後預設關閉。</small>
+                <div class="cmi-log-toolbar">
+                    <select id="cmi_log_run" class="text_pole" aria-label="篩選日誌任務"><option value="">所有任務／操作</option></select>
+                    <select id="cmi_log_filter" class="text_pole" aria-label="篩選日誌等級"><option value="all">所有等級</option><option value="problems">警告與錯誤</option><option value="error">只有錯誤</option><option value="debug">詳細內容</option></select>
+                </div>
+                <div class="cmi-log-toolbar">
+                    <button id="cmi_log_copy" class="menu_button" type="button">複製日誌</button>
+                    <button id="cmi_log_download" class="menu_button" type="button">下載日誌</button>
+                    <button id="cmi_log_clear" class="menu_button" type="button">清除</button>
+                    <label class="checkbox_label" for="cmi_log_follow"><input id="cmi_log_follow" type="checkbox" checked /><span>自動捲到底</span></label>
+                </div>
+                <div id="cmi_log_output" class="cmi-log-output" role="region" aria-label="生成與運行日誌內容" tabindex="0"></div>
+                <small id="cmi_log_status" class="cmi-status" role="status">複製與下載僅包含目前篩選結果。</small>
+            </details>
             <label for="cmi_provider">生圖來源</label>
             <select id="cmi_provider" class="text_pole">
                 <option value="comfy-modal">ComfyUI / Modal 控制面板</option>

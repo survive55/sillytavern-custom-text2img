@@ -84,3 +84,57 @@
 .cmi-settings .flex1 {
     min-width: 0;
 }
+
+.cmi-log-panel summary {
+    cursor: pointer;
+    padding: 6px 0;
+}
+
+.cmi-log-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin: 6px 0;
+}
+
+.cmi-log-toolbar select {
+    flex: 1 1 130px;
+    min-width: 0;
+    max-width: 100%;
+}
+
+.cmi-log-toolbar .menu_button {
+    width: auto;
+    height: auto;
+    margin: 0;
+}
+
+.cmi-log-toolbar .checkbox_label {
+    margin: 0;
+}
+
+.cmi-log-output {
+    height: 320px;
+    max-height: 50vh;
+    overflow: auto;
+    padding: 8px;
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 4px;
+    background: rgba(0, 0, 0, 0.15);
+    user-select: text;
+    overscroll-behavior: contain;
+}
+
+.cmi-log-entry {
+    margin: 0 0 8px;
+    padding: 4px 0 4px 6px;
+    border-left: 3px solid var(--SmartThemeBorderColor);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font: 12px/1.5 var(--monoFontFamily, monospace);
+}
+
+.cmi-log-error { border-color: #e06c75; }
+.cmi-log-warn { border-color: #d9b65c; }
+.cmi-log-debug { border-color: #67a8ce; }

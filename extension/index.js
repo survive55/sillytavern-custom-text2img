@@ -18,6 +18,8 @@
 import { saveBase64AsFile } from '/scripts/utils.js';
 import { MEDIA_DISPLAY, MEDIA_SOURCE, MEDIA_TYPE, SCROLL_BEHAVIOR } from '/scripts/constants.js';
 import { generateWithPolling } from './generation.js';
+import { createLogStore, logSecrets } from './logs.js';
+import { mountLogPanel } from './logs-ui.js';
 import { PROVIDER_DEFAULTS, migrateSettings, providerConnection, buildNovelPayload } from './providers.js';
 import { createPanelClient } from './panel.js';
 import { createNovelAI } from './novelai.js';
@@ -36,6 +38,8 @@ let cachedPanel = null, cachedPanelKey = '';
 const BUTTON_CLASS = 'cmi_message_gen';
 const BUSY_CLASS = 'cmi_busy';
 const LOG_PREFIX = '[SillyTavernCustomText2Img]';
+const logs = createLogStore();
+const startLog = (provider, messageId, settings = getSettings()) => logs.startRun({ provider, messageId }, logSecrets(settings, novelSessionToken));
 
 const DEFAULT_SYSTEM_PROMPT = [
     'You are an expert prompt engineer for anime-style image models (NovelAI Diffusion / Illustrious / SDXL).',
@@ -242,7 +246,7 @@ function cleanPrompt(raw) {
  * @param {AbortSignal} signal
  * @returns {Promise<string>}
  */
-async function generatePrompt(messageId, message, signal, settings = getSettings()) {
+async function generatePrompt(messageId, message, signal, settings = getSettings(), log) {
     const context = SillyTavern.getContext();
     const connectionMode = settings.promptConnectionMode === 'manual' ? 'manual' : 'profile';
     if (connectionMode === 'profile') {
@@ -294,9 +298,17 @@ async function generatePrompt(messageId, message, signal, settings = getSettings
         if (systemPrompt) messages.push({ role: 'system', content: systemPrompt });
         messages.push({ role: 'user', content: userPrompt });
     }
+    log?.add('llm', '送出提示詞 LLM 請求', { data: { connectionMode, maxTokens, messageCount: messages.length } });
+    log?.detail('llm.request', '插件送往 LLM／Connection Manager 的訊息（非最終供應商 wire payload）', {
+        connectionMode, model: connectionMode === 'manual' ? settings.manualLlmModel : undefined,
+        profileId: connectionMode === 'profile' ? settings.profileId : undefined, messages, maxTokens,
+    });
+    const started = Date.now();
     const result = await sendPromptRequest({ settings, messages, maxTokens, signal, preset, context, manualLlm });
 
     const content = typeof result === 'string' ? result : result?.content;
+    log?.add('llm', '已收到 LLM 回覆', { data: { durationMs: Date.now() - started, characters: String(content ?? '').length } });
+    log?.detail('llm.response', 'LLM 原始文字回覆', { content });
     const prompt = cleanPrompt(content);
     if (!prompt) {
         throw new Error('提示詞生成模型回傳了空白內容。');
@@ -410,12 +422,13 @@ async function loadSelectedPreset(signal, settings = getSettings(), client = get
  * @param {(event: any) => void} onEvent
  * @returns {Promise<{ images: string[], seed: string | null, generationId: number | null }>}
  */
-async function generateImages(payload, signal, onEvent, client) {
+async function generateImages(payload, signal, onEvent, client, onJob) {
     // This same frozen client is used for submit, polling AND image retrieval.
     return generateWithPolling({
         submit: (requestSignal) => client.submit(payload, requestSignal),
         poll: (jobId, after, requestSignal) => client.poll(jobId, after, requestSignal),
         onEvent,
+        onJob,
         signal,
     });
 }
@@ -495,11 +508,15 @@ async function onMessageButtonClick($button) {
     const title = `Custom Text2Img · ${novel ? 'NovelAI' : 'ComfyUI / Modal'}`;
     const messageId = Number($button.closest('.mes').attr('mesid'));
     const message = context.chat[messageId];
+    const log = startLog(novel ? 'novelai' : 'comfy-modal', messageId, settings);
+    log.add('start', '開始生成插圖');
     if (!message || !String(message.mes ?? '').trim()) {
+        log.add('validation', '找不到樓層文字。', { level: 'warn' });
         toastr.warning('找不到樓層文字。', title);
         return;
     }
     if (!novel && (!settings.baseUrl.trim() || !settings.password)) {
+        log.add('validation', '請先填寫 ComfyUI 控制面板的 Base URL 與密碼。', { level: 'error' });
         toastr.error('請先填寫 ComfyUI 控制面板的 Base URL 與密碼。', title);
         return;
     }
@@ -515,66 +532,113 @@ async function onMessageButtonClick($button) {
         ? (context.groups?.find(g => g.id === context.groupId)?.name || 'group')
         : (context.name2 || 'character');
     const toast = createProgressToast(title, () => controller.abort('Aborted by user'));
+    let stage = 'prepare';
+    const update = (nextStage, text) => { stage = nextStage; log.add(stage, text); toast.update(text); };
+    const onAbort = () => log.add('stop', '已要求停止等待；這不代表取消已提交的生圖或退款。', { level: 'warn' });
+    signal.addEventListener('abort', onAbort, { once: true });
 
     try {
+        update('prepare', '檢查圖片來源連線與憑證…');
         const client = createImageClient(plan);
         await client.prepare(signal);
         signal.throwIfAborted();
-        toast.update('正在請 AI 撰寫圖片提示詞…');
-        let prompt = await generatePrompt(messageId, message, signal, settings);
+        update('llm', '正在請 AI 撰寫圖片提示詞…');
+        let prompt = await generatePrompt(messageId, message, signal, settings, log);
         if (settings.reviewPrompt) {
-            toast.update('等待檢視提示詞…');
+            update('review', '等待檢視提示詞…');
             const edited = await reviewPrompt(prompt, settings.provider);
-            if (edited === null) return;
+            signal.throwIfAborted();
+            if (edited === null) {
+                log.add('cancel', '已取消提示詞審閱，未送出生圖請求。', { level: 'warn' });
+                return;
+            }
             prompt = edited;
+            log.add('review', '提示詞審閱已確認');
         }
         signal.throwIfAborted();
         let payload;
+        stage = 'payload';
         if (novel) {
             payload = buildNovelPayload(prompt, settings);
         } else {
-            toast.update('讀取面板預設組合…');
+            update('preset', '讀取面板預設組合…');
             payload = buildGeneratePayload(prompt, await loadSelectedPreset(signal, settings, client), settings);
         }
-        toast.update('送出產圖請求…');
+        log.detail('image.request', '生圖提示詞與參數（插件提交內容）', payload);
+        update('submit', '送出產圖請求（僅提交一次）…');
         const result = await generateImages(payload, signal, (event) => {
             const text = describeEvent(event);
+            stage = 'generation';
             if (text) toast.update(text);
-        }, client);
+            // Do not dump arbitrary provider events by default: they can contain
+            // prompts, workflow data, tokens or image bytes.
+            if (event?.type !== 'error') {
+                const summaries = { accepted: '圖片來源已接受任務', queued: '任務排隊中', warming: 'GPU 容器喚醒中',
+                    submitting: '送出工作流', progress: '取樣進行中', node: '執行工作流節點', image: '圖片已產生',
+                    done: '圖片來源回報完成', reconnecting: '連線暫時中斷，重試查詢同一任務（不重新提交）' };
+                const metadata = {};
+                for (const key of ['value', 'max', 'position', 'elapsed_seconds', 'nodes', 'generation_id']) {
+                    if (typeof event?.[key] === 'number' && Number.isFinite(event[key])) metadata[key] = event[key];
+                }
+                if (/^\d{1,20}$/.test(String(event?.node ?? ''))) metadata.node = String(event.node);
+                log.add('generation', Object.hasOwn(summaries, event?.type) ? summaries[event.type] : '收到圖片來源事件', {
+                    level: event?.type === 'reconnecting' ? 'warn' : 'info', data: metadata,
+                });
+            }
+            log.detail('generation.event', '圖片來源事件（詳細模式）', event);
+        }, client, jobId => {
+            stage = 'generation';
+            log.add('accepted', '任務 ID 已取得，接下來只輪詢此任務', { data: { jobId } });
+        });
         if (!result.images.length) throw new Error('圖片伺服器沒有回傳任何圖片。');
+        log.add('generation', '生圖完成', { data: { count: result.images.length,
+            seed: /^\d{1,20}$/.test(String(result.seed ?? '')) ? result.seed : undefined,
+            generationId: Number.isSafeInteger(result.generationId) ? result.generationId : undefined } });
 
-        toast.update(`下載 ${result.images.length} 張圖片…`);
+        update('download', `下載 ${result.images.length} 張圖片…`);
         const saved = [];
         const seeds = [];
         for (const path of result.images) {
             signal.throwIfAborted();
+            const number = saved.length + 1;
+            update('download', `讀取圖片 ${number}/${result.images.length}…`);
             const file = await client.output(path, signal);
             const filename = `${characterName}_${context.humanizedDateTime()}_${saved.length}`;
+            update('save', `儲存圖片 ${number}/${result.images.length} 到 ST…`);
             const url = await saveBase64AsFile(file.data, characterName, filename, file.format || 'png');
             saved.push(url);
             seeds.push(file.seed ?? (saved.length === 1 || !novel ? result.seed : null));
+            log.add('save', `圖片 ${number} 已儲存`, { data: { format: file.format, byteCount: file.bytes } });
+            log.detail('save.output', '圖片保存位置', { sourcePath: path, savedUrl: url });
         }
         signal.throwIfAborted();
         const current = SillyTavern.getContext();
         if (chatIdAtStart !== current.getCurrentChatId() || current.chat[messageId] !== message
             || message.mes !== textAtStart || message.swipe_id !== swipeAtStart) {
+            log.add('attach', '聊天或樓層已變動；圖片已儲存，但未附加到其他樓層。', { level: 'warn' });
             toastr.warning('聊天或樓層已變動；圖片已儲存，但未附加到其他樓層。', title);
             return;
         }
+        update('attach', '附加圖片並保存聊天…');
         attachImagesToMessage(messageId, saved, {
             title: prompt, negative: payload.negative_prompt ?? payload.negative_text ?? '', seed: result.seed, seeds,
         });
         await current.saveChat();
+        log.add('complete', `已為第 ${messageId} 樓生成並保存 ${saved.length} 張插圖。`);
         toastr.success(`已為第 ${messageId} 樓生成 ${saved.length} 張插圖。`, title, { timeOut: 4000 });
     } catch (error) {
         if (signal.aborted) {
-            toastr.info(novel
+            const warning = novel
                 ? '已停止等待。NovelAI 仍可能扣點；目前分頁仍會接收結果，關閉或重整會遺失未保存圖片，勿立即重複生成。'
-                : '已停止等待。已提交的生圖仍會繼續，可在圖片控制面板歷史紀錄取回。', title);
+                : '已停止等待。已提交的生圖仍會繼續，可在圖片控制面板歷史紀錄取回。';
+            log.add(stage, warning, { level: 'warn' });
+            toastr.info(warning, title);
         } else {
+            log.error(stage, error);
             toastr.error(String(error?.message || error), `${title} 生成失敗`, { timeOut: 10000, escapeHtml: true });
         }
     } finally {
+        signal.removeEventListener('abort', onAbort);
         toast.close();
         activeJobs.delete(buttonEl);
         $button.removeClass(BUSY_CLASS).removeClass('fa-fade');
@@ -780,15 +844,23 @@ function validateManualHeaders() {
 }
 
 async function testManualLlmConnection() {
+    const log = startLog('llm');
+    log.add('connection.test', '測試手動 LLM 連線…');
     setStatus('#cmi_manual_llm_status', '測試中…');
     $('#cmi_manual_llm_test').prop('disabled', true);
     try {
-        if (!validateManualHeaders()) return;
+        if (!validateManualHeaders()) {
+            log.add('connection.test', '額外 Headers 驗證失敗；未送出請求。', { level: 'error' });
+            return;
+        }
         const result = await manualLlm.send(getSettings(), [
             { role: 'user', content: 'Reply with exactly: OK' },
         ], 8, new AbortController().signal);
+        log.add('connection.test', '手動 LLM 連線成功');
+        log.detail('llm.response', 'LLM 測試回覆', { content: result });
         setStatus('#cmi_manual_llm_status', `連線成功：${String(result).trim().slice(0, 80) || '收到空回應'}`, 'ok');
     } catch (error) {
+        log.error('connection.test', error);
         setStatus('#cmi_manual_llm_status', String(error?.message || error), 'error');
     } finally {
         $('#cmi_manual_llm_test').prop('disabled', false);
@@ -799,6 +871,8 @@ async function refreshPanelPresets({ silent = false } = {}) {
     const settings = getSettings();
     const $select = $('#cmi_panel_preset');
     const current = settings.panelPreset || '';
+    const log = startLog('comfy-modal');
+    log.add('presets', '讀取控制面板預設清單…');
     try {
         const data = await getPanelClient().presets();
         const presets = Array.isArray(data?.presets) ? data.presets : [];
@@ -810,8 +884,10 @@ async function refreshPanelPresets({ silent = false } = {}) {
             $('<option>').val(current).text(`${current}（伺服器上不存在）`).appendTo($select);
         }
         $select.val(current);
+        log.add('presets', `讀取到 ${presets.length} 個預設組合。`);
         if (!silent) toastr.success(`讀取到 ${presets.length} 個預設組合。`, 'Custom Text2Img');
     } catch (error) {
+        log.error('presets', error);
         if (!silent) toastr.error(String(error?.message || error), '讀取預設組合失敗');
         if (current && !$select.find(`option[value="${CSS.escape(current)}"]`).length) {
             $('<option>').val(current).text(current).appendTo($select);
@@ -821,12 +897,16 @@ async function refreshPanelPresets({ silent = false } = {}) {
 }
 
 async function onTestConnection() {
+    const log = startLog('comfy-modal');
+    log.add('connection.test', '測試控制面板連線…');
     setStatus('#cmi_connection_status', '測試中…');
     try {
         const data = await getPanelClient().test();
+        log.add('connection.test', '控制面板瀏覽器直連成功', { data: { waiting: Number.isFinite(data.waiting) ? data.waiting : undefined } });
         setStatus('#cmi_connection_status', `瀏覽器直連成功（${data.baseUrl}，HTTP 輪詢／Quick Tunnel 可用，佇列等待 ${data.waiting}）`, 'ok');
         await refreshPanelPresets({ silent: true });
     } catch (error) {
+        log.error('connection.test', error);
         setStatus('#cmi_connection_status', String(error?.message || error), 'error');
     }
 }
@@ -923,7 +1003,10 @@ function useNovelTokenForSession() {
 }
 
 async function testNovelConnection() {
+    const log = startLog('novelai');
+    log.add('connection.test', '測試 NovelAI Token（唯讀，不生圖）…');
     if (String($('#cmi_novel_token').val() || '').trim()) {
+        log.add('connection.test', '有尚未套用的 Token；未送出測試。', { level: 'warn' });
         setStatus('#cmi_novel_status', '輸入框有尚未套用的 Token，請先選擇「加密儲存」或「僅本次使用」。', 'error');
         return;
     }
@@ -931,8 +1014,10 @@ async function testNovelConnection() {
     $('#cmi_novel_test').prop('disabled', true);
     try {
         const result = await novelai.client(unlockedToken()).test();
+        log.add('connection.test', result.message);
         setStatus('#cmi_novel_status', result.message, 'ok');
     } catch (error) {
+        log.error('connection.test', error);
         setStatus('#cmi_novel_status', String(error?.message || error), 'error');
     } finally {
         $('#cmi_novel_test').prop('disabled', false);
@@ -1109,6 +1194,8 @@ async function init() {
 
     const html = await context.renderExtensionTemplateAsync(EXTENSION_FOLDER, 'settings');
     $('#extensions_settings').append(html);
+    mountLogPanel(document.getElementById('cmi_log_panel'), logs);
+    startLog('runtime').add('init', 'Custom Text2Img 已初始化（瀏覽器直連；日誌僅存於本分頁）');
     loadSettingsIntoUi();
     bindSettingsUi();
 

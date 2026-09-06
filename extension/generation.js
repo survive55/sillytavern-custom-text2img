@@ -22,7 +22,7 @@ function waitForPoll(ms, signal) {
  * @param {object} options
  * @returns {Promise<{images: string[], seed: string|null, generationId: number|null}>}
  */
-export async function generateWithPolling({ submit, poll, onEvent, signal, delay = waitForPoll }) {
+export async function generateWithPolling({ submit, poll, onEvent, onJob, signal, delay = waitForPoll }) {
     signal.throwIfAborted();
     let snapshot;
     try {
@@ -37,6 +37,7 @@ export async function generateWithPolling({ submit, poll, onEvent, signal, delay
     if (typeof jobId !== 'string' || !/^[a-f0-9]{32}$/.test(jobId)) {
         throw new Error('圖片伺服器沒有回傳有效的任務 ID');
     }
+    onJob?.(jobId);
     const images = new Set();
     let cursor = 0;
     let seed = null;
@@ -67,7 +68,8 @@ export async function generateWithPolling({ submit, poll, onEvent, signal, delay
                         for (const path of event.images ?? []) images.add(path);
                         break;
                     case 'error':
-                        throw new Error(event.message || '圖片伺服器回報錯誤');
+                        throw Object.assign(new Error(event.message || '圖片伺服器回報錯誤'),
+                            Number.isInteger(event.status) ? { status: event.status } : {});
                     default:
                         break;
                 }

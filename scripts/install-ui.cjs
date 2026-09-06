@@ -6,7 +6,7 @@ const crypto = require('node:crypto');
 
 const ID = 'sillytavern-custom-text2img';
 const LEGACY_ID = 'st-comfy-modal-illustrator';
-const RUNTIME_FILES = Object.freeze(['index.js', 'generation.js', 'providers.js', 'http.js', 'manual-llm.js', 'llm-presets.js', 'panel.js', 'novelai.js', 'novelai-payload.js', 'images.js', 'token-vault.js', 'settings.html', 'style.css', 'package.json', 'README.md', 'manifest.json']);
+const RUNTIME_FILES = Object.freeze(['index.js', 'generation.js', 'logs.js', 'logs-ui.js', 'providers.js', 'http.js', 'manual-llm.js', 'llm-presets.js', 'panel.js', 'novelai.js', 'novelai-payload.js', 'images.js', 'token-vault.js', 'settings.html', 'style.css', 'package.json', 'README.md', 'manifest.json']);
 
 function plainDirectory(location) {
     if (!fs.existsSync(location)) return;

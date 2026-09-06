@@ -10,6 +10,7 @@ import { normalizeToken } from '../http.js';
 import { createManualLlmClient, parseExtraHeaders } from '../manual-llm.js';
 import { encryptToken, decryptToken } from '../token-vault.js';
 import * as llmPresets from '../llm-presets.js';
+import { createLogStore, logSecrets } from '../logs.js';
 import { PNG_BASE64, PNG_BYTES, JOB_ID, panelLogin } from './fixtures.mjs';
 
 // Run actual button functions and both real browser transports. Only DOM/ST and
@@ -63,7 +64,7 @@ function fixture({ provider = 'novelai', configured = true, onSubmit = () => {},
     const button = { get: () => element, addClass() { return this; }, removeClass() { return this; }, closest: () => ({ attr: () => '0' }) };
     const toast = { find: () => ({ text() {} }) };
     const sandbox = {
-        console, structuredClone, AbortController, AbortSignal, URL, ...llmPresets,
+        console, structuredClone, AbortController, AbortSignal, URL, ...llmPresets, createLogStore, logSecrets,
         SillyTavern: { getContext: () => context }, $: () => ({ length: 1 }),
         toastr: Object.fromEntries(['info', 'warning', 'error', 'success', 'clear'].map(kind => [kind, (...args) => { notifications.push({ kind, args }); return toast; }])),
         MEDIA_DISPLAY: { GALLERY: 'gallery' }, MEDIA_SOURCE: { GENERATED: 'generated' }, MEDIA_TYPE: { IMAGE: 'image' }, SCROLL_BEHAVIOR: { KEEP: 'keep' },
@@ -75,10 +76,58 @@ function fixture({ provider = 'novelai', configured = true, onSubmit = () => {},
     };
     vm.runInNewContext(`${source}\ngetSettings(); novelSessionToken = ${JSON.stringify(configured ? 'fake-novel-token' : '')};
         unlockedVaultFingerprint = JSON.stringify(getSettings().novelVault); novelSessionMode = 'memory';
-        globalThis.api = { onMessageButtonClick, listProfiles };`, sandbox, { filename: 'extension/index.js' });
-    return { run: () => sandbox.api.onMessageButtonClick(button), profiles: () => sandbox.api.listProfiles(), close: () => api.close(), context, message, settings, calls, saves, notifications, prompts, reviews,
+        globalThis.api = { onMessageButtonClick, listProfiles, logs };`, sandbox, { filename: 'extension/index.js' });
+    return { logs: sandbox.api.logs, run: () => sandbox.api.onMessageButtonClick(button), profiles: () => sandbox.api.listProfiles(), close: () => api.close(), context, message, settings, calls, saves, notifications, prompts, reviews,
         get savedChats() { return savedChats; }, get rendered() { return rendered; } };
 }
+
+test('generation logs cover stages with no prompts, chat, credentials or image bytes by default', async t => {
+    const f = fixture(); t.after(f.close);
+    await f.run();
+    const entries = f.logs.getEntries(), stages = entries.map(entry => entry.stage);
+    for (const stage of ['start', 'prepare', 'llm', 'submit', 'accepted', 'generation', 'download', 'save', 'attach', 'complete']) assert.ok(stages.includes(stage), stage);
+    assert.equal(new Set(entries.map(entry => entry.runId)).size, 1);
+    const text = JSON.stringify(entries);
+    assert.doesNotMatch(text, /landscape|sunrise|forest|fake-novel-token|manual-secret-key|fake-panel-secret/);
+    assert.ok(!text.includes(PNG_BASE64));
+    assert.match(text, /jobId/);
+});
+
+test('detailed generation logs record request, raw response and final payload but mask credential echoes', async t => {
+    const f = fixture({ provider: 'comfy-modal', review: true }); t.after(f.close);
+    f.logs.setDetailed(true);
+    f.message.mes += ' fake-panel-secret manual-secret-key';
+    f.context.ConnectionManagerRequestService.sendRequest = async () => 'landscape, fake-panel-secret, manual-secret-key';
+    await f.run();
+    const text = JSON.stringify(f.logs.getEntries());
+    assert.match(text, /llm.request|llm.response|image.request/);
+    assert.match(text, /landscape/); assert.match(text, /edited/); assert.match(text, /forest clearing/);
+    assert.doesNotMatch(text, /fake-panel-secret|manual-secret-key|fake-novel-token/);
+    assert.ok(!text.includes(PNG_BASE64));
+});
+
+test('logs preserve failure stage and cancellation without any image submit', async t => {
+    const f = fixture(); t.after(f.close);
+    f.context.ConnectionManagerRequestService.sendRequest = async () => { throw new Error('broken manual-secret-key'); };
+    await f.run();
+    assert.equal(f.calls.length, 0);
+    assert.ok(f.logs.getEntries().some(entry => entry.stage === 'llm' && entry.level === 'error'));
+    assert.doesNotMatch(JSON.stringify(f.logs.getEntries()), /manual-secret-key/);
+    const cancelled = fixture({ review: true }); t.after(cancelled.close);
+    cancelled.context.callGenericPopup = async () => null;
+    await cancelled.run();
+    assert.equal(cancelled.calls.length, 0);
+    assert.ok(cancelled.logs.getEntries().some(entry => entry.stage === 'cancel'));
+});
+
+test('stopping LLM waiting is a warning and never submits an image request', async t => {
+    const f = fixture(); t.after(f.close);
+    f.context.ConnectionManagerRequestService.sendRequest = async () => { await f.run(); return 'landscape'; };
+    await f.run();
+    assert.equal(f.calls.length, 0);
+    assert.ok(f.logs.getEntries().some(entry => entry.stage === 'stop' && entry.level === 'warn'));
+    assert.equal(f.logs.getEntries().some(entry => entry.stage === 'complete'), false);
+});
 
 test('real NovelAI button flow: direct official API, independent profile, prompt review, multiple gallery images', async t => {
     const f = fixture({ review: true }); t.after(f.close);

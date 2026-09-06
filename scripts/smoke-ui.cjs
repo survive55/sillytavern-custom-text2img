@@ -288,6 +288,15 @@ async function main() {
         await clickGenerate(2);
         let media = await page.evaluate(() => SillyTavern.getContext().chat[0].extra.media);
         assert.deepEqual(media.map(image => image.seed), ['0', '1']);
+        await openSettings();
+        await page.locator('#cmi_log_panel > summary').click();
+        await page.waitForFunction(() => document.querySelector('#cmi_log_output').textContent.includes('[complete]'));
+        assert.equal(await page.locator('#cmi_log_detail').isChecked(), false);
+        const defaultLogs = await page.locator('#cmi_log_output').textContent();
+        assert.match(defaultLogs, /jobId/);
+        assert.doesNotMatch(defaultLogs, /landscape|sunrise|forest clearing|browser-smoke-fake-novel-token|browser-smoke-panel-password|browser-smoke-manual-key/);
+        assert.ok(!defaultLogs.includes(PNG_BASE64));
+        await page.locator('#cmi_log_detail').check();
         // Import actual ST JSON through the file input, then generate through
         // the native-CORS manual API. No paid network call is possible.
         await openPromptSettings();
@@ -356,11 +365,44 @@ async function main() {
         savedChats += await page.evaluate(() => window.__cmiSmoke.savedChats);
         const outputDir = path.resolve(__dirname, '../test-results'); fs.mkdirSync(outputDir, { recursive: true });
         await page.locator('#chat').screenshot({ path: path.join(outputDir, `ui-gallery-${layout}.png`) });
+        await openSettings();
+        await page.waitForFunction(() => document.querySelector('#cmi_log_output').textContent.includes('[image.request]'));
+        const detailedLogs = await page.locator('#cmi_log_output').textContent();
+        assert.match(detailedLogs, /llm.request/); assert.match(detailedLogs, /llm.response/);
+        assert.match(detailedLogs, /Illustrate Browser fixture/);
+        for (const secret of [token, phrase, password, 'browser-smoke-manual-key', PANEL_TOKEN, PNG_BASE64]) assert.ok(!detailedLogs.includes(secret));
+        await page.locator('#cmi_log_filter').selectOption('debug');
+        assert.equal(await page.locator('#cmi_log_output .cmi-log-info').count(), 0);
+        // Clipboard is isolated to this fixture: never replace the user's system clipboard.
+        await page.evaluate(() => Object.defineProperty(navigator, 'clipboard', { configurable: true,
+            value: { writeText: async text => { window.__cmiCopiedLogs = text; } } }));
+        await page.locator('#cmi_log_copy').click();
+        const copiedLogs = await page.evaluate(() => window.__cmiCopiedLogs);
+        assert.match(copiedLogs, /llm.request/); assert.doesNotMatch(copiedLogs, /\] INFO /);
+        const downloadPromise = page.waitForEvent('download');
+        await page.locator('#cmi_log_download').click();
+        const download = await downloadPromise;
+        assert.match(download.suggestedFilename(), /^custom-text2img-logs-.*\.txt$/);
+        const downloadText = fs.readFileSync(await download.path(), 'utf8');
+        assert.match(downloadText, /llm.request/); assert.ok(!downloadText.includes(token));
+        await page.locator('#cmi_log_filter').selectOption('all');
+        const firstRun = await page.locator('#cmi_log_run option').nth(1).getAttribute('value');
+        await page.locator('#cmi_log_run').selectOption(firstRun);
+        assert.ok((await page.locator('#cmi_log_output pre').allTextContents()).every(text => text.includes(`[${firstRun} ·`)));
+        await page.locator('#cmi_log_run').selectOption('');
+        await page.locator('#cmi_log_panel').screenshot({ path: path.join(outputDir, `ui-logs-${layout}.png`) });
+        await page.setViewportSize({ width: 390, height: 844 });
+        await page.locator('#cmi_log_panel').screenshot({ path: path.join(outputDir, `ui-logs-mobile-${layout}.png`) });
+        const fits = await page.locator('#cmi_log_panel').evaluate(el => el.scrollWidth <= el.clientWidth + 1);
+        assert.equal(fits, true, 'Log panel must not overflow on mobile');
+        await page.setViewportSize({ width: 1440, height: 1080 });
 
         // Reload proves there is no remembered plaintext token. Only encrypted fixture settings survive.
         savedVault = record;
         await page.reload({ waitUntil: 'domcontentloaded' }); await page.locator('#cmi_settings').waitFor({ state: 'attached' });
         await fixtureChat(); await openPromptSettings();
+        assert.equal(await page.locator('#cmi_log_detail').isChecked(), false, 'Reload must disable detailed logging');
+        assert.doesNotMatch(await page.locator('#cmi_log_output').textContent(), /llm.request|image.request|\[complete\]/, 'Reload must discard previous logs');
         assert.equal(await page.locator('#cmi_prompt_preset_mode').inputValue(), 'preset');
         assert.equal(await page.locator('#cmi_llm_preset').inputValue(), selectedPreset);
         assert.deepEqual(await readSavedRoles(), expectedRoles, 'Generation and reload must preserve saved roles');
@@ -414,7 +456,17 @@ async function main() {
             assert.equal(call.body.parameters.n_samples, 2); assert.equal(call.body.parameters.seed, 0);
             assert.equal(call.body.parameters.cfg_rescale, 0); assert.ok(!JSON.stringify(call.body).includes(password));
         }
-        await openSettings(); await page.locator('#cmi_provider').selectOption('novelai');
+        await openSettings();
+        await page.locator('#cmi_log_panel > summary').click();
+        await page.waitForFunction(() => document.querySelector('#cmi_log_output').textContent.includes('[complete]'));
+        assert.match(await page.locator('#cmi_log_output').textContent(), /重試查詢同一任務/);
+        await page.locator('#cmi_log_filter').selectOption('problems');
+        assert.ok(await page.locator('#cmi_log_output .cmi-log-warn').count());
+        assert.ok(await page.locator('#cmi_log_output .cmi-log-error').count(), 'Locked token test must retain an error');
+        await page.locator('#cmi_log_clear').click();
+        await page.waitForFunction(() => document.querySelector('#cmi_log_summary').textContent.includes('0 / 0'));
+        assert.equal(await page.locator('#cmi_log_output pre').count(), 0);
+        await page.locator('#cmi_provider').selectOption('novelai');
         await page.locator('#cmi_settings').screenshot({ path: path.join(outputDir, `ui-smoke-${layout}.png`) });
         const manifest = await page.evaluate(async prefix => (await fetch(prefix + 'manifest.json')).json(), extensionPrefix);
         assert.equal(manifest.version, require('../package.json').version);

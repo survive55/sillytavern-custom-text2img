@@ -6,6 +6,8 @@
 - 提示詞 LLM 可選 Connection Manager，或直接手動配置 OpenAI 相容 API 的 Base URL、端點路徑、模型、API Key 與 Headers。
 - 「LLM 提示詞來源」可匯入 ST Chat Completion JSON（prompts／prompt_order 或舊版 main_prompt），按角色、順序、quiet 與 In-Chat 深度生成提示詞；匯入不切換主預設、不覆蓋 API 連線。升級仍沿用原模板，隨時可切回。世界書、第三方 Regex／腳本與非通用參數不會自動執行，請閱讀介面相容性提示。
 - ComfyUI 圖片參數預設与 LLM 預設分開保留。
+- 「生成／運行日誌」提供即時流程、任務 ID、耗時、進度、錯誤摘要，支援依任務／等級篩選、複製、下載與清除。只存於目前分頁（最多 500 筆／約 1 Mi 字元），重整即清空。
+- 詳細模式預設關閉，手動開啟後才記錄後續 LLM 訊息／回覆、生圖提示詞／參數及原始錯誤；憑證遮蔽、不記錄圖片 base64。詳細紀錄可能含私人聊天，分享前請檢查；關閉模式不刪除既有內容，需清除日誌。日誌不是 GPU 伺服器的完整終端輸出；NovelAI 不提供逐步取樣進度。
 - 開發者也可執行 `node scripts/install-ui.cjs --sillytavern /path/to/ST --user <handle>` 同步獨立前端。兩種方式二選一，避免重複載入。
 - NovelAI 直接呼叫官方 API；Token 可加密保存並以獨立密語解鎖，或僅在目前分頁使用。不讀取 ST 主連線或舊版 secrets。
 - ComfyUI／Modal 直接呼叫已更新面板的 `/api/browser` API；仍保留預設、LoRA、覆寫參數、64-bit Seed 和任務輪詢。
