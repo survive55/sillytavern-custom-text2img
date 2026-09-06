@@ -109,6 +109,53 @@ test('preset user prompts are not expanded or sent after import, reload or order
     assert.throws(() => build(fixture([p('only-user', 'USER', { role: 'user' })]), { history: [] }), /沒有任何/);
 });
 
+test('user-role history/example containers preserve child roles and assistant injections across reloads and orders', () => {
+    for (const marker of [true, false]) {
+        const raw = fixture([
+            p('main', 'System'),
+            p('dialogueExamples', 'NEVER EXPAND CONTAINER', { role: 'user', marker }),
+            p('chatHistory', 'NEVER EXPAND CONTAINER', { role: 'user', marker }),
+            p('assistant-relative', 'Assistant relative', { role: 'assistant' }),
+            p('assistant-depth', 'Assistant depth', { role: 'assistant', injection_position: 1, injection_depth: 0 }),
+            p('excluded', 'USER EXCLUDED', { role: 'user' }),
+        ]);
+        raw.prompt_order.push({ character_id: 7, order: raw.prompt_order[0].order });
+        const { preset } = importLlmPreset(JSON.stringify(raw));
+        for (const saved of [preset, normalizeLlmPreset(JSON.parse(JSON.stringify(preset))).preset]) {
+            const before = structuredClone(saved);
+            for (const { character_id: orderId } of saved.prompt_order) {
+                const expanded = [];
+                assert.deepEqual(buildPresetMessages(saved, { orderId, history, char: 'Char', user: 'User',
+                    fields: { mesExamples: '<START>\nUser: Example input\nChar: Example reply' },
+                    expand: text => { expanded.push(text); return text; } }), [
+                    { role: 'system', content: 'System' },
+                    { role: 'user', content: 'Example input' }, { role: 'assistant', content: 'Example reply' },
+                    ...history, { role: 'assistant', content: 'Assistant depth' },
+                    { role: 'assistant', content: 'Assistant relative' },
+                ]);
+                assert.ok(!expanded.some(text => /NEVER EXPAND|USER EXCLUDED/.test(text)));
+            }
+            assert.deepEqual(saved, before);
+        }
+    }
+});
+
+test('user-role containers still obey order switches and quiet triggers', () => {
+    for (const enabled of [true, false]) {
+        for (const injection_trigger of [[], ['normal']]) {
+            const raw = fixture([p('main', 'System'),
+                p('chatHistory', '', { role: 'user', marker: true, injection_trigger }),
+                p('dialogueExamples', '', { role: 'user', marker: true, injection_trigger })],
+            [o('main'), o('chatHistory', enabled), o('dialogueExamples', enabled)]);
+            const active = enabled && !injection_trigger.length;
+            assert.deepEqual(build(raw, { fields: { mesExamples: '<START>\nChar: Example reply' }, char: 'Char' }), [
+                { role: 'system', content: 'System' },
+                ...(active ? [...history, { role: 'assistant', content: 'Example reply' }] : []),
+            ]);
+        }
+    }
+});
+
 test('Relative follows ST Message for non-user roles: preserve truthy roles and default falsy roles only when building', () => {
     for (const role of ['system', 'assistant', 'model', 'tool', 'developer', 'unknown', '', 0, false, null, 7, {}, []]) {
         const raw = fixture([p('role', 'Text', { role })]);

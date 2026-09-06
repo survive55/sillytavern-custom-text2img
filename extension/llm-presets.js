@@ -252,10 +252,12 @@ export function buildPresetMessages(preset, { orderId = '', history = [], fields
     char = '', user = '', isGroup = false, groupNames = [] } = {}) {
     const order = getPresetOrder(preset, orderId);
     const byId = new Map(preset.prompts.map(item => [item.identifier, item]));
-    // Exclude preset-authored user prompts before expanding macros or injecting
-    // history. Do not filter assembled messages: independent user turns stay valid.
+    // Exclude preset-authored user text before macro expansion. History/examples
+    // are containers, not authored messages: their children supply their own roles.
+    // Match by identifier, like the dispatch below (some exports omit marker).
     const enabled = order.filter(entry => entry.enabled === true).map(entry => byId.get(entry.identifier)).filter(Boolean)
-        .filter(item => item.role !== 'user' && shouldTriggerPresetPrompt(item));
+        .filter(item => (item.role !== 'user' || ['chatHistory', 'dialogueExamples'].includes(item.identifier))
+            && shouldTriggerPresetPrompt(item));
     const result = [], injections = [];
     let historyIndex = -1, phiIndex = -1;
     for (const item of enabled) {

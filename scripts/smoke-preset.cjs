@@ -44,7 +44,7 @@ async function main() {
                 { role: 'user', is_user: false, mes: 'EXCLUDED CONFLICTING USER' },
                 { role: 'assistant', mes: 'old scene', name: 'Artist', extra: { reasoning: 'EXCLUDED REASONING' } }, { mes: 'EXCLUDED FUTURE' }];
             const sourceBefore = JSON.stringify(sourceChat);
-            const preset = normalizeLlmPreset({ prompts: [{ identifier: 'main', role: 'system', content: '{{setvar::private::yes}}{{getvar::private}} {{lastMessage}}' }, { identifier: 'chatHistory', marker: true }],
+            const preset = normalizeLlmPreset({ prompts: [{ identifier: 'main', role: 'system', content: '{{setvar::private::yes}}{{getvar::private}} {{lastMessage}}' }, { identifier: 'chatHistory', marker: true, role: 'user' }],
                 prompt_order: [{ character_id: 100001, order: [{ identifier: 'main', enabled: true }, { identifier: 'chatHistory', enabled: true }] }], extensions: { regex_scripts: rules } }).preset;
             let state = await runPresetTask('create', { preset, snapshot: snapshotScene(sourceChat, 3, 10), fields: {}, char: 'Artist', user: 'User', bodyCleanupRules: '[]' });
             const draft = await runPresetTask('prepare', { state });
@@ -60,7 +60,10 @@ async function main() {
             window.__sourceUnchanged = sourceBefore === JSON.stringify(sourceChat);
         }, rules);
         await page.locator('.cmi-preset-conversation').waitFor();
-        assert.doesNotMatch(JSON.stringify(await page.evaluate(() => window.__firstRequest)), /EXCLUDED/);
+        const firstRequest = await page.evaluate(() => window.__firstRequest);
+        assert.doesNotMatch(JSON.stringify(firstRequest), /EXCLUDED/);
+        assert.deepEqual(firstRequest.filter(message => message.role === 'assistant'), [{ role: 'assistant', content: 'old scene' }],
+            'A user-role history container must retain assistant scene messages');
         assert.equal(await page.evaluate(() => window.__sourceUnchanged), true);
         assert.equal(await page.evaluate(() => window.__calls.length), 0);
         assert.equal(await page.locator('.cmi-preset-frame').getAttribute('sandbox'), '');

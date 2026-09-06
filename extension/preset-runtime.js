@@ -44,12 +44,13 @@ export function preparePresetRequest(previous, userText = null) {
         content: `${state.isGroup && item.name ? `${item.name}: ` : ''}${item.text}` })).filter(item => item.content.trim());
     const historyEntry = getPresetOrder(state.preset, state.orderId).find(item => item.identifier === 'chatHistory');
     const historyPrompt = state.preset.prompts.find(item => item.identifier === 'chatHistory');
-    const historyOff = historyEntry && (!historyEntry.enabled || historyPrompt?.role === 'user' || !shouldTriggerPresetPrompt(historyPrompt));
+    // chatHistory is a container; its saved role does not override its children.
+    const historyOff = historyEntry && (!historyEntry.enabled || !shouldTriggerPresetPrompt(historyPrompt));
     const messages = buildPresetMessages(state.preset, { orderId: state.orderId, fields,
         history: historyOff ? [] : messagesFrom(processed), expand: macros.expand,
         char: state.char, user: state.user, isGroup: state.isGroup, groupNames: state.groupNames });
-    // A disabled, user-role or non-triggering ST-history marker must not discard
-    // explicit independent user turns. Original ST floor data stays excluded.
+    // A disabled or non-triggering ST-history marker must not discard explicit
+    // independent user turns. Original ST floor data stays excluded.
     if (historyOff) messages.push(...messagesFrom(processed.slice(state.scene.history.length)));
     boundedText(JSON.stringify(messages));
     state.macroState = macros.snapshot();

@@ -4,7 +4,7 @@
 
 - 在 ST「安裝擴展」貼上 [專案網址](https://github.com/survive55/sillytavern-custom-text2img)，根目錄 manifest 會載入本目錄。
 - 提示詞 LLM 可選 Connection Manager，或直接手動配置 OpenAI 相容 API 的 Base URL、端點路徑、模型、API Key 與 Headers。
-- 「LLM 提示詞來源」可匯入 ST Chat Completion JSON，按角色、順序、quiet 與 In-Chat 深度生成提示詞；預設 `prompts` 中 `role: user` 項目一律略過，不展開巨集、不傳送（含 In-Chat），不影響獨立面板手動輸入與角色对話範例。不切換主預設、不覆蓋 API 連線。支援原生預設 Regex 及本次對話隔離變數；不載入全域／主聊天正則，不混用 SPreset。舊版匯入沒有保存正則，需重新匯入。
+- 「LLM 提示詞來源」可匯入 ST Chat Completion JSON，按角色、順序、quiet 與 In-Chat 深度生成提示詞；預設 `prompts` 中 `role: user` 一般提示詞項目略過（`chatHistory`／`dialogueExamples` 容器除外，其內部訊息保留實際角色），不展開巨集、不傳送（含 In-Chat），不影響獨立面板手動輸入與角色对話範例。不切換主預設、不覆蓋 API 連線。支援原生預設 Regex 及本次對話隔離變數；不載入全域／主聊天正則，不混用 SPreset。舊版匯入沒有保存正則，需重新匯入。
 - 樓層只讀 assistant 的 `mes` 正文，不讀主聊天 user 樓層、`extra.reasoning` 或畫面 HTML。額外正文清理預設關閉（`[]`），可編輯 JSON 正則或載入 thinking／think 範例；不改寫 ST 原紀錄。
 - 預設可啟用獨立提示詞對話面板。HTML 先靜態預覽，嵌入 JS 每次需明確啟用，只支援有限的獨立輸入／送出相容介面；不是完整酒館助手／STscript。iframe 沒有主頁同源權限，JS 需支援 credentialless 的瀏覽器。隔離限制資源載入，但不是完整斷網／CPU 沙箱，只執行可信預設。腳本「直接送出」只提出請求，需在插件面板確認才呼叫提示詞 LLM；圖片生成另行確認。世界書與其他擴展仍不執行。
 - ComfyUI 圖片參數預設与 LLM 預設分開保留。

@@ -16,7 +16,7 @@
 ## 正文來源與選配清理
 
 - 模板模式與預設模式都只讀 **assistant 樓層的 `mes` 正文**，範圍止於被點選樓層。不讀主聊天 user 樓層、`extra.reasoning`、後續樓層、DOM 渲染文字或畫面用 HTML。
-- 來源篩選共用同一規則：排除 ST 的 `is_user`／`is_system` 與 narrator；若訊息另有明確 `role`，僅接受 `assistant`，不把 `role: user` 因缺少 `is_user` 而誤當 assistant。目標不是 assistant 時停止，不回退到別的樓層。**匯入預設 `prompts` 中的 `role: user` 項目也會在組裝前略過，但不刪改保存的來源資料；獨立面板的新輸入不受影響。**
+- 來源篩選共用同一規則：排除 ST 的 `is_user`／`is_system` 與 narrator；若訊息另有明確 `role`，僅接受 `assistant`，不把 `role: user` 因缺少 `is_user` 而誤當 assistant。目標不是 assistant 時停止，不回退到別的樓層。**匯入預設 `prompts` 中的 `role: user` 一般提示詞項目也會在組裝前略過（歷史／範例容器除外），但不刪改保存的來源資料；獨立面板的新輸入不受影響。**
 - 前文數量計算可用的 assistant 訊息。`{{message}}`、`{{history}}`、`{{lastMessage}}`、`{{lastChatMessage}}`、`{{lastCharMessage}}` 使用同一份文字副本；`{{lastMessageId}}` 保留目標 ST 樓層編號。讀取主聊天時 `{{lastUserMessage}}` 為空，**獨立面板中使用者新輸入的 user 訊息仍正常加入對話**。
 - ST `openai.js` 的 `setOpenAIMessages` 將 `mes` 映射為 `content`、`is_user` 映射為角色，沒有因 `role: assistant` 自動清理內嵌標記。ST 已分離的思考位於 `extra.reasoning`，本插件不讀取。
 - **正文額外清理預設為 `[]`（關閉）**，直接採用 ST 已保存的正文。不是固定要求 `<正文>` 或 `<content>` 包裹。
@@ -35,12 +35,12 @@
 - 支援完整 CC JSON：`prompts`、`prompt_order`；Prompt Manager `version: 1` 的 `full`／`character` 匯出（`data`、平面順序）；舊版 `main_prompt`、`nsfw_prompt`、`jailbreak_prompt`，包含刻意空白，不補 ST 預設角色扮演文字。
 - 缺少順序時使用 ST 內建順序，不按 `prompts` 儲存順序，也不自動啟用所有自訂條目。
 - 按 `identifier` 對應，**與原生 ST 一致，以所選 `prompt_order` 的 `enabled` 開關為準，再套用 trigger**。順序必須明確為 `true`；未啟用或未列入所選順序的自訂條目不會送出。`prompts[].enabled` 僅保留為來源資料，不參與啟用判定，因此它即使是 `false`，也不會否決順序中的 `true`；匯入、重新載入與切換順序使用同一規則。
-- 保存原始 `role`，不將 `model` 改成 `assistant`。**組裝前一律排除 `prompts[].role === 'user'` 的項目**，不讀取其內容來生成提示詞、不展開其中巨集、不讓它注入或佔深度；涵蓋 Relative、In-Chat 與 user-role marker。這是生圖預設的額外篩選，不是原生 ST 的行為；不刪改已保存項目或順序開關，也不過濾獨立面板手動輸入與角色對話範例產生的 user 訊息。
+- 保存原始 `role`，不將 `model` 改成 `assistant`。**組裝前排除 `prompts[].role === 'user'` 的一般提示詞項目（`chatHistory`／`dialogueExamples` 容器除外）**，不讀取其內容來生成提示詞、不展開其中巨集、不讓它注入或佔深度；涵蓋 Relative、In-Chat 與 user-role marker。這是生圖預設的額外篩選，不是原生 ST 的行為；不刪改已保存項目或順序開關，也不過濾獨立面板手動輸入與角色對話範例產生的 user 訊息。
 - 其餘 Relative 依 ST `Message` 行為，只為缺少或 falsy 角色補 `system`；其他角色交給傳輸／API，供應商可能拒絕。不因未使用的非標準角色拒絕整份匯入。
 - 排除 user 後，In-Chat 僅注入精確的 `system`／`assistant`，其他角色不注入也不佔深度。角色／Persona 等欄位 marker 依 nullish 規則補 `system`；保存角色不變。
 - 生成類型為 **quiet**：trigger 空白適用所有類型，否則必須含 `quiet`。
 - Relative 按順序排列；In-Chat 按深度與 order 插入。深度計算独立歷史訊息，不計已插入段落。同深度／order／role 合併換行，排除 user 後角色排列 assistant → system。
-- `chatHistory` 放入所選 assistant 正文與獨立對話。部分匯出未列出 marker 時補場景（PHI 前）；**明確停用、role 為 user 或不適用 quiet 時，不重新開啟 ST 歷史**。但使用者明確送出的獨立面板對話，仍附在組裝結果後，不會被悄悄丟掉。
+- `chatHistory` 放入所選 assistant 正文與獨立對話。部分匯出未列出 marker 時補場景（PHI 前）；**明確停用或不適用 quiet 時，不重新開啟 ST 歷史**。`chatHistory`／`dialogueExamples` 是訊息容器，其保存的 `role`（即使為 `user`）不會覆蓋或刪除內部訊息；依 identifier 辨識，匯出未帶 `marker` 旗標也適用。但使用者明確送出的獨立面板對話，仍附在組裝結果後，不會被悄悄丟掉。
 - 支援角色描述、個性、場景、Persona、文字範例、new-chat／new-example／personality／scenario 格式。群聊使用被點選作者的原始卡片，保留說話者姓名；不是完整群聊卡片 join 策略。
 - 世界書／未知 marker 略過並提示；不掃描世界書，不套用角色卡 main／PHI overrides，不改主卡片設定。
 
@@ -96,7 +96,7 @@
 - 模板、Text Completion／Instruct、圖片參數及圖集保留；樓層來源按新規則限定 assistant 正文。
 - 切回模板不刪預設。刪除預設需確認，然後恢復模板。
 - **旧版已匯入項目需重新匯入原始 JSON**才能恢復未保存的 Regex 或早期被改寫的 role。沒有原始資料時不猜測重建。已保存正確 `prompt_order` 的項目，更新並重整後即採用新的啟用判定，不必為 `prompts[].enabled` 的衝突重新匯入；若舊資料的順序開關曾被改寫，則需重新匯入原始 JSON。
-- 已保存正確 `role: user` 的預設，更新並重整後即套用排除規則，不需重新匯入；原始 JSON 與插件保存內容不會被刪改。
+- 已保存正確 `role: user` 的預設，更新並重整後即套用一般提示詞排除規則與歷史／範例容器例外，不需重新匯入；原始 JSON 與插件保存內容不會被刪改。修復 `667eb74` 將 user-role `chatHistory` 容器誤當 user 指令，導致其 assistant 正文全數被排除的回歸。
 - 不提供完整 tokenizer／context-budget 截斷；過長時 API 可能拒絕，請減少前文／預設／對話輪次。`openai_max_context` 不當作輸出上限。
 - ComfyUI 圖片參數預設的 LoRA／解析度／正負提示詞仍按原流程，與 LLM 預設分開。
 

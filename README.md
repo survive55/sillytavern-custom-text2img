@@ -42,7 +42,7 @@ GitHub 安裝下載的檔案已包含完整瀏覽器程式，不需要安裝後�
 
 ## 生圖提示詞 LLM 預設
 
-在「提示詞生成 → LLM 提示詞來源」選擇 **匯入的 Chat Completion LLM 預設**，再按「匯入並選用 JSON」。支援 ST 的 `prompts`／`prompt_order`、Prompt Manager 匯出及舊版 `main_prompt` 等欄位；實際按段落啟用狀態、順序、角色、quiet 觸發與 In-Chat 深度組装 LLM 訊息，而不只是套用溫度。**預設 `prompts` 中 `role: user` 項目在巨集展開前一律略過（含 In-Chat），不送給 LLM；獨立面板手動輸入與角色對話範例不受此篩選影響。**
+在「提示詞生成 → LLM 提示詞來源」選擇 **匯入的 Chat Completion LLM 預設**，再按「匯入並選用 JSON」。支援 ST 的 `prompts`／`prompt_order`、Prompt Manager 匯出及舊版 `main_prompt` 等欄位；實際按段落啟用狀態、順序、角色、quiet 觸發與 In-Chat 深度組装 LLM 訊息，而不只是套用溫度。**預設 `prompts` 中 `role: user` 一般提示詞項目在巨集展開前略過（`chatHistory`／`dialogueExamples` 容器除外，其內部訊息保留實際角色）（含 In-Chat），不送給 LLM；獨立面板手動輸入與角色對話範例不受此篩選影響。**
 
 匯入只保存於本插件；不切換 ST 主預設、不使用匯入 JSON 的 API 網址／模型／金鑰。可搭配獨立 Chat Completion profile 或手動 API，生成文字再交給圖片來源。**ComfyUI 圖片參數預設是另一個保留相容的選項，不是這裡的 LLM 預設。**
 
