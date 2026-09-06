@@ -77,18 +77,40 @@ test('imports preserve model and unknown roles without activating unused prompts
         assert.deepEqual(getPresetOrder(preset, orderId), raw.prompt_order[1].order);
         const expanded = [];
         assert.deepEqual(buildPresetMessages(preset, { history, expand: text => { expanded.push(text); return text; } }), [
-            { role: 'user', content: 'Describe the scene' }, ...history,
-            { role: 'model', content: 'A quiet landscape' },
+            ...history, { role: 'model', content: 'A quiet landscape' },
         ]);
-        assert.ok(!expanded.some(text => ['Do not send', 'Not in order', 'Not for quiet'].includes(text)));
+        assert.ok(!expanded.some(text => ['Describe the scene', 'Do not send', 'Not in order', 'Not for quiet'].includes(text)));
         assert.deepEqual(normalizeLlmPreset(JSON.parse(JSON.stringify(preset))).preset, preset, 'Reload preserves roles');
         assert.deepEqual(preset.prompts.map(item => item.role), raw.prompts.map(item => item.role), 'Building must not rewrite saved roles');
     }
     assert.deepEqual(raw, before);
 });
 
-test('Relative follows ST Message: preserve truthy roles and default falsy roles only when building', () => {
-    for (const role of ['system', 'user', 'assistant', 'model', 'tool', 'developer', 'unknown', '', 0, false, null, 7, {}, []]) {
+test('preset user prompts are not expanded or sent after import, reload or order changes', () => {
+    const raw = fixture([p('user-relative', 'USER RELATIVE', { role: 'user' }),
+        p('user-in-chat', 'USER IN CHAT', { role: 'user', injection_position: 1, injection_depth: 4 }),
+        p('main', 'System'), p('assistant', 'Assistant', { role: 'assistant' }), p('chatHistory')]);
+    raw.prompt_order.push({ character_id: 7, order: [o('user-in-chat'), o('main'), o('user-relative'), o('assistant'), o('chatHistory')] });
+    const before = structuredClone(raw), { preset } = importLlmPreset(JSON.stringify(raw));
+    for (const saved of [preset, normalizeLlmPreset(JSON.parse(JSON.stringify(preset))).preset]) {
+        const savedBefore = structuredClone(saved);
+        for (const { character_id: orderId } of saved.prompt_order) {
+            const expanded = [];
+            assert.deepEqual(buildPresetMessages(saved, { orderId, history, expand: text => { expanded.push(text); return text; } }), [
+                { role: 'system', content: 'System' }, { role: 'assistant', content: 'Assistant' }, ...history,
+            ]);
+            assert.deepEqual(expanded, ['System', 'Assistant']);
+        }
+        assert.deepEqual(saved, savedBefore, 'Filtering must not rewrite saved prompts or order switches');
+    }
+    assert.deepEqual(raw, before);
+    assert.equal(preset.prompts[0].role, 'user');
+    assert.equal(preset.prompts[0].content, 'USER RELATIVE');
+    assert.throws(() => build(fixture([p('only-user', 'USER', { role: 'user' })]), { history: [] }), /沒有任何/);
+});
+
+test('Relative follows ST Message for non-user roles: preserve truthy roles and default falsy roles only when building', () => {
+    for (const role of ['system', 'assistant', 'model', 'tool', 'developer', 'unknown', '', 0, false, null, 7, {}, []]) {
         const raw = fixture([p('role', 'Text', { role })]);
         const before = structuredClone(raw);
         const { preset } = importLlmPreset(JSON.stringify(raw));
@@ -103,8 +125,8 @@ test('Relative follows ST Message: preserve truthy roles and default falsy roles
     assert.equal(Object.hasOwn(preset.prompts[0], 'role'), false);
 });
 
-test('In-Chat only groups native ST roles; ignored roles cannot shift later injection positions', () => {
-    const ignoredRoles = ['model', 'tool', 'developer', 'unknown', undefined, null, '', 0, false, {}, []];
+test('In-Chat excludes preset user and non-native roles without shifting later injection positions', () => {
+    const ignoredRoles = ['user', 'model', 'tool', 'developer', 'unknown', undefined, null, '', 0, false, {}, []];
     const raw = fixture([p('chatHistory', '', { marker: true }),
         ...ignoredRoles.map((role, i) => p(`ignored-${i}`, 'IGNORE', { role, injection_position: 1, injection_depth: 5 })),
         p('deep', 'Deep', { role: 'assistant', injection_position: 1, injection_depth: 4 }),
@@ -116,14 +138,14 @@ test('In-Chat only groups native ST roles; ignored roles cannot shift later inje
         p('system', 'System', { injection_position: 1, injection_depth: 0 }),
     ]);
     assert.deepEqual(build(raw), [
-        { role: 'assistant', content: 'Deep' }, history[0], { role: 'user', content: 'Middle' }, history[1],
-        { role: 'assistant', content: 'First\nSecond' }, { role: 'user', content: 'User' }, { role: 'system', content: 'System' },
+        { role: 'assistant', content: 'Deep' }, ...history,
+        { role: 'assistant', content: 'First\nSecond' }, { role: 'system', content: 'System' },
     ]);
     assert.throws(() => build(fixture([p('chatHistory'), p('only-model', 'Ignored', { role: 'model', injection_position: 1 })]), { history: [] }), /沒有任何/);
 });
 
 test('built-in field markers use ST nullish system fallback without changing the stored override', () => {
-    for (const role of [undefined, null, '', 'model', 'assistant']) {
+    for (const role of [undefined, null, '', 'user', 'model', 'assistant']) {
         const raw = fixture([p('chatHistory'), p('charDescription', '', { role, injection_position: 1, injection_depth: 0 })]);
         const { preset } = normalizeLlmPreset(raw);
         const messages = buildPresetMessages(preset, { history, fields: { description: 'Traveler' } });
@@ -251,9 +273,8 @@ test('in-chat depth counts original messages and group priority matches ST rever
         p('early', 'priority', { role: 'assistant', injection_position: 1, injection_depth: 0, injection_order: 10 }),
         p('user', 'user', { role: 'user', injection_position: 1, injection_depth: 0 }), p('phi')]);
     assert.deepEqual(build(raw), [
-        { role: 'system', content: 'main' }, { role: 'system', content: 'deep' }, history[0],
-        { role: 'user', content: 'depth1' }, history[1], { role: 'assistant', content: 'priority' },
-        { role: 'user', content: 'user' }, { role: 'system', content: 'depth0\nsecond' }, { role: 'system', content: 'phi' },
+        { role: 'system', content: 'main' }, { role: 'system', content: 'deep' }, ...history,
+        { role: 'assistant', content: 'priority' }, { role: 'system', content: 'depth0\nsecond' }, { role: 'system', content: 'phi' },
     ]);
 });
 
@@ -277,7 +298,7 @@ test('character/persona/scenario markers, role overrides, formats and examples a
     { personality_format: 'Personality: {{personality}}', scenario_format: 'Scene: {{scenario}}', new_chat_prompt: 'NEW', new_example_chat_prompt: 'EXAMPLE' });
     const fields = { description: 'Traveler', personality: 'calm', scenario: 'forest', persona: 'User persona', mesExamples: '<START>\nUser: hello\nTraveler: hi\nthere' };
     assert.deepEqual(build(raw, { fields, char: 'Traveler', user: 'User', expand: text => text.replace('{{personality}}', 'calm').replace('{{scenario}}', 'forest') }), [
-        { role: 'system', content: 'Traveler' }, { role: 'user', content: 'Personality: calm' },
+        { role: 'system', content: 'Traveler' },
         { role: 'system', content: 'Scene: forest' }, { role: 'system', content: 'User persona' },
         { role: 'system', content: 'EXAMPLE' }, { role: 'user', content: 'hello' }, { role: 'assistant', content: 'hi\nthere' },
         { role: 'system', content: 'NEW' }, ...history,

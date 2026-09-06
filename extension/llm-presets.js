@@ -252,8 +252,10 @@ export function buildPresetMessages(preset, { orderId = '', history = [], fields
     char = '', user = '', isGroup = false, groupNames = [] } = {}) {
     const order = getPresetOrder(preset, orderId);
     const byId = new Map(preset.prompts.map(item => [item.identifier, item]));
+    // Exclude preset-authored user prompts before expanding macros or injecting
+    // history. Do not filter assembled messages: independent user turns stay valid.
     const enabled = order.filter(entry => entry.enabled === true).map(entry => byId.get(entry.identifier)).filter(Boolean)
-        .filter(item => shouldTriggerPresetPrompt(item));
+        .filter(item => item.role !== 'user' && shouldTriggerPresetPrompt(item));
     const result = [], injections = [];
     let historyIndex = -1, phiIndex = -1;
     for (const item of enabled) {

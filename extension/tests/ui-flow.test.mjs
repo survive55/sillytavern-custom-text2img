@@ -208,8 +208,8 @@ for (const mode of ['manual', 'profile']) {
         assert.equal(body.temperature, 0.3); assert.equal(body.max_tokens, 900);
         assert.deepEqual(JSON.parse(JSON.stringify(body.messages)), [
             { role: 'system', content: 'Draw Alice. Alice wears red. Target {{user}} literal #0' },
-            { role: 'assistant', content: 'Alice: Target {{user}} literal' }, { role: 'user', content: 'DEPTH OFF' },
-            { role: 'user', content: 'Tags only' }, { role: 'model', content: 'landscape,' },
+            { role: 'assistant', content: 'Alice: Target {{user}} literal' },
+            { role: 'model', content: 'landscape,' },
             { role: 'system', content: 'PROMPT OFF Target {{user}} literal' },
         ]);
         assert.deepEqual(imported.preset.prompts.filter(item => ['prefill', 'off', 'unlisted', 'in-chat'].includes(item.identifier))
@@ -323,7 +323,7 @@ test('template scene macros use assistant mes only and cleanup is opt-in', async
 
 for (const mode of ['template', 'preset']) {
     for (const connection of ['profile', 'manual']) {
-        test(`${mode}/${connection}: only assistant main-chat bodies reach the LLM; preset user instructions stay`, async t => {
+        test(`${mode}/${connection}: only assistant main-chat bodies reach the LLM; preset user instructions are excluded`, async t => {
             const f = fixture(); t.after(f.close);
             Object.assign(f.settings, { promptPresetMode: mode, promptConnectionMode: connection, historyDepth: 2 });
             const references = '{{message}}|{{history}}|{{lastMessage}}|{{lastChatMessage}}|{{lastCharMessage}}|USER=[{{lastUserMessage}}]';
@@ -336,10 +336,11 @@ for (const mode of ['template', 'preset']) {
             const input = f.context.chat.map(message => message.mes);
             if (mode === 'preset') {
                 const imported = llmPresets.importLlmPreset(JSON.stringify({ prompts: [
-                    { identifier: 'main', role: 'user', content: `PRESET USER INSTRUCTION ${references}` },
+                    { identifier: 'main', role: 'system', content: references },
+                    { identifier: 'user-prompt', role: 'user', content: `PRESET USER INSTRUCTION ${references}` },
                     { identifier: 'chatHistory', marker: true },
                 ], prompt_order: [{ character_id: 100001, order: [
-                    { identifier: 'main', enabled: true }, { identifier: 'chatHistory', enabled: true },
+                    { identifier: 'main', enabled: true }, { identifier: 'user-prompt', enabled: true }, { identifier: 'chatHistory', enabled: true },
                 ] }] }));
                 Object.assign(f.settings, { llmPresetId: 'test', llmPresets: [{ id: 'test', ...imported }] });
                 f.context.CONNECT_API_MAP = { cc: { selected: 'openai' } };
@@ -355,8 +356,9 @@ for (const mode of ['template', 'preset']) {
             assert.match(text, /bright forest clearing/);
             assert.match(text, /USER=\[\]/);
             if (mode === 'preset') {
-                assert.equal(messages[0].role, 'user');
-                assert.match(messages[0].content, /PRESET USER INSTRUCTION/);
+                assert.equal(messages[0].role, 'system');
+                assert.doesNotMatch(text, /PRESET USER INSTRUCTION/);
+                assert.ok(messages.every(message => message.role !== 'user'));
                 assert.ok(messages.slice(1).every(message => message.role === 'assistant'));
             }
             assert.deepEqual(f.context.chat.map(message => message.mes), input);

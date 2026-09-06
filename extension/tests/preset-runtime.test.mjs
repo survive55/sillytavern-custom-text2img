@@ -122,6 +122,32 @@ test('prompt-level false does not disable ordered prompts, variables or history 
         { role: 'assistant', content: 'landscape' }, { role: 'user', content: 'use sunset' }]);
 });
 
+test('preset user macros never run while independent user turns and examples remain usable', () => {
+    for (const historyRole of ['system', 'user']) {
+        const prompts = [
+            { identifier: 'user-relative', role: 'user', content: '{{setvar::leak::BAD}}EXCLUDED RELATIVE' },
+            { identifier: 'user-in-chat', role: 'user', content: '{{setglobalvar::leak::BAD}}EXCLUDED IN CHAT', injection_position: 1, injection_depth: 0 },
+            { identifier: 'main', role: 'system', content: 'Safe {{getvar::leak}}{{getglobalvar::leak}}' },
+            { identifier: 'dialogueExamples', marker: true },
+            { identifier: 'chatHistory', marker: true, role: historyRole },
+        ];
+        const initial = state([], { prompts, prompt_order: [{ character_id: 100001,
+            order: prompts.map(item => ({ identifier: item.identifier, enabled: true })) }] });
+        initial.fields.mesExamples = '<START>\nUser: Example input\nChar: Example reply';
+        const before = structuredClone(initial), first = preparePresetRequest(initial);
+        const expected = [{ role: 'system', content: 'Safe' }, { role: 'user', content: 'Example input' },
+            { role: 'assistant', content: 'Example reply' }];
+        if (historyRole !== 'user') expected.push({ role: 'assistant', content: '<Interleaving>old scene</Interleaving>' });
+        assert.deepEqual(first.messages, expected);
+        assert.doesNotMatch(JSON.stringify(first.state.macroState), /leak|BAD/);
+        assert.deepEqual(initial, before);
+        const response = acceptPresetResponse(first.state, 'landscape');
+        const next = preparePresetRequest(response.state, 'use sunset');
+        assert.deepEqual(next.messages, [...expected, { role: 'assistant', content: 'landscape' }, { role: 'user', content: 'use sunset' }]);
+        assert.doesNotMatch(JSON.stringify(next.state.macroState), /leak|BAD/);
+    }
+});
+
 test('history trigger excludes ST scene but does not discard independent follow-up', () => {
     const initial = state([], { prompts: [
         { identifier: 'main', role: 'system', content: 'Describe the scene' },
