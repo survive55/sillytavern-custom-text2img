@@ -27,7 +27,7 @@
   ```
 
 - 「填入 thinking／think 清理範例」提供可編輯規則，移除文中多段穿插的思考區塊；未閉合的起始思考標記會移除其後文字。這只是選配範例，並非自動啟用。
-- 無匹配時保留剩餘文字；前文清理後為空則略過，目標清理後為空、規則無效或逾時則停止，**不回退原始全文**。不修改 ST 原聊天紀錄。
+- 無匹配時保留剩餘文字；前文清理後為空則略過，目標清理後為空、規則無效或使用者手動取消則停止，**不回退原始全文**。不修改 ST 原聊天紀錄。
 - 原模板其餘 ST 巨集仍沿用舊行為；插件自有訊息引用受到上述來源限制。第三方自行註冊、可讀取其他聊天的巨集不屬於本插件控制範圍。匯入預設則完全不呼叫 ST 的全域巨集引擎。
 
 ## 提示詞組裝
@@ -62,7 +62,7 @@
 - 未勾 prompt/display 的规则套在獨立副本接收階段；`promptOnly` 套在送出獨立歷史時，並用於最終提示詞候選的文字版本；`markdownOnly` 只建立回覆顯示版本。兩者可同時勾選。
 - 深度 0 是独立上下文最新訊息，向前計數，包含新獨立 user／assistant 對話；**並非主聊天原始樓層編號差**。原始 ST 聊天被裁剪、排除 user 後，深度對象也會不同。
 - 支援 `/pattern/flags`、裸 pattern、數字／命名捕捉群組、`{{match}}`、trim、find 巨集原樣／跳脫展開。捕捉文字不呼叫主聊天巨集。
-- 主聊天／全域／角色卡正則不被讀取。所有正則在 Worker 執行，單次操作 4 秒逾時就終止，不阻塞 ST UI。
+- 主聊天／全域／角色卡正則不被讀取。所有正則在 Worker 執行，**不設處理時間限制**，不再因超過 4 秒而失敗。Worker 不阻塞 ST UI；若正則卡住或處理太久，可按進度提示的「停止」手動終止，不會自動重試。
 - 顯示產生的 HTML／JS **不寫回獨立原文、ST 聊天或後續 LLM 歷史**。最終圖片提示詞從文字版本產生，仍需檢查；不保證任意角色扮演輸出已是有效圖片 tags。
 
 ## HTML／JS 互動面板
@@ -107,5 +107,5 @@
 - `reasoning.js` 的 `parseReasoningFromString` 預設只在開頭匹配一段，依主聊天 reasoning 設定；本插件不因讀正文而修改這些設定。可選清理範例能處理多段穿插區塊。
 - [MDN iframe](https://developer.mozilla.org/en-US/docs/Web/HTML/Reference/Elements/iframe)、[credentialless](https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/IFrame_credentialless)。
 - `npm run check`、`npm test`、`npm run test:ui -- http://127.0.0.1:8001 --layout=repository --without-backend`；另測 standalone／installed。
-- `node scripts/smoke-preset.cjs http://127.0.0.1:8001 [本機預設JSON]`：可只取樣本的 Regex 測真實顯示脚本，不執行其提示詞、不保存使用者內容到測試碼。驗證真實 Worker 逾時、主 DOM／storage 隔離、無自動送出、父頁確認與多輪文字歷史。
+- `node scripts/smoke-preset.cjs http://127.0.0.1:8001 [本機預設JSON]`：可只取樣本的 Regex 測真實顯示脚本，不執行其提示詞、不保存使用者內容到測試碼。驗證真實 Worker 超過 4 秒仍可成功、手動取消卡死正則、詳細錯誤回傳、主 DOM／storage 隔離、無自動送出、父頁確認與多輪文字歷史。Worker 取消使用 [MDN Worker.terminate()](https://developer.mozilla.org/en-US/docs/Web/API/Worker/terminate) 所述的立即終止方式。
 - 測試只使用假 API／假憑證，攔截設定／聊天保存，不呼叫付費服務。

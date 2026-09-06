@@ -550,6 +550,11 @@ async function main() {
         await page.locator('#cmi_log_filter').selectOption('problems');
         assert.ok(await page.locator('#cmi_log_output .cmi-log-warn').count());
         assert.ok(await page.locator('#cmi_log_output .cmi-log-error').count(), 'Locked token test must retain an error');
+        assert.equal(await page.locator('#cmi_log_detail').isChecked(), false);
+        const visibleErrors = await page.locator('#cmi_log_output .cmi-log-error').allTextContents();
+        assert.match(visibleErrors.join('\n'), /請先儲存並解鎖 NovelAI Token/);
+        assert.doesNotMatch(visibleErrors.join('\n'), /原始錯誤僅在詳細模式|原始錯誤（詳細模式）/);
+        assert.ok(!visibleErrors.join('\n').includes(token), 'Errors still redact credentials');
         await page.locator('#cmi_log_clear').click();
         await page.waitForFunction(() => document.querySelector('#cmi_log_summary').textContent.includes('0 / 0'));
         assert.equal(await page.locator('#cmi_log_output pre').count(), 0);

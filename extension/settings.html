@@ -14,7 +14,7 @@
                 <summary><b>生成／運行日誌</b> <small id="cmi_log_summary"></small></summary>
                 <small class="cmi-hint">即時記錄本擴充的流程與錯誤，僅保留於目前分頁（最多 500 筆／約 1 Mi 字元；單筆過長會截斷）。重整即清空，不寫入聊天或設定。這不是 GPU 伺服器的完整終端日誌；NovelAI 不提供逐步取樣進度。</small>
                 <label class="checkbox_label" for="cmi_log_detail"><input id="cmi_log_detail" type="checkbox" /><span>詳細模式：記錄後續 LLM 訊息／回覆與生圖提示詞、參數</span></label>
-                <small class="cmi-hint">詳細紀錄可能包含角色與聊天內容。憑證會遮蔽、不記錄圖片 base64；分享前仍請檢查。關閉詳細模式不刪除已記錄的內容；重整後預設關閉。</small>
+                <small class="cmi-hint">錯誤原因與堆疊直接顯示，不需開詳細模式。上游錯誤及詳細紀錄可能包含角色與聊天內容。憑證會遮蔽、不記錄圖片 base64；分享前仍請檢查。關閉詳細模式不刪除已記錄的內容；重整後預設關閉。</small>
                 <div class="cmi-log-toolbar">
                     <select id="cmi_log_run" class="text_pole" aria-label="篩選日誌任務"><option value="">所有任務／操作</option></select>
                     <select id="cmi_log_filter" class="text_pole" aria-label="篩選日誌等級"><option value="all">所有等級</option><option value="problems">警告與錯誤</option><option value="error">只有錯誤</option><option value="debug">詳細內容</option></select>
@@ -198,7 +198,7 @@
                         <textarea id="cmi_body_cleanup" class="text_pole monospace" rows="6"></textarea>
                         <div class="flex-container"><button id="cmi_body_cleanup_thinking" type="button" class="menu_button">填入 thinking／think 清理範例</button><button id="cmi_body_cleanup_clear" type="button" class="menu_button">關閉額外清理</button></div>
                         <small id="cmi_body_cleanup_status" class="cmi-status" aria-live="polite"></small>
-                        <small class="cmi-hint">格式為 [{"findRegex":"/要移除的內容/g","replaceString":""}]；亦可用捕捉群組 $1 擷取自訂正文。沒有匹配時保留其餘內容，不限定正文包裹方式。規則無效、逾時或目標清理後為空會停止，不退回原始全文。不改寫 ST 聊天紀錄。</small>
+                        <small class="cmi-hint">格式為 [{"findRegex":"/要移除的內容/g","replaceString":""}]；亦可用捕捉群組 $1 擷取自訂正文。沒有匹配時保留其餘內容，不限定正文包裹方式。規則無效或目標清理後為空會停止，不退回原始全文。獨立預設／正文清理不設時間限制；若處理太久或正則卡住，可按進度提示的「停止」手動終止。不改寫 ST 聊天紀錄。</small>
                     </details>
                     <div data-cmi-prompt-preset="template">
                         <label for="cmi_system_prompt">系統提示</label><textarea id="cmi_system_prompt" class="text_pole textarea_compact" rows="6"></textarea>

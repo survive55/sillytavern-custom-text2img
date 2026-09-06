@@ -1,18 +1,32 @@
-/** Each task owns a disposable Worker; a hostile regex cannot freeze ST's UI. */
-export function runPresetTask(type, payload, signal, timeoutMs = 4000) {
+/** Each task owns a disposable Worker. No time limit; Stop can terminate even a stuck regex. */
+export function runPresetTask(type, payload, signal) {
     signal?.throwIfAborted();
     return new Promise((resolve, reject) => {
         const worker = new Worker(new URL('./preset-worker.js', import.meta.url), { type: 'module' });
-        let timer;
+        let settled = false;
         const finish = (error, value) => {
-            clearTimeout(timer); worker.terminate(); signal?.removeEventListener('abort', abort);
+            if (settled) return;
+            settled = true;
+            worker.onmessage = worker.onerror = worker.onmessageerror = null;
+            worker.terminate(); signal?.removeEventListener('abort', abort);
             if (error) reject(error); else resolve(value);
         };
         const abort = () => finish(new DOMException('已取消獨立提示詞處理。', 'AbortError'));
         signal?.addEventListener('abort', abort, { once: true });
-        timer = setTimeout(() => finish(new Error('獨立預設處理逾時（4 秒）；已終止 Worker，請檢查正文清理／正則規則。')), timeoutMs);
-        worker.onmessage = ({ data }) => data.ok ? finish(null, data.result) : finish(new Error(data.error));
-        worker.onerror = () => finish(new Error('無法載入獨立預設 Worker；請重新整理並確認擴展檔案完整。'));
+        worker.onmessage = ({ data }) => {
+            if (data?.ok === true) return finish(null, data.result);
+            const detail = data?.error;
+            const error = new Error(`獨立預設 ${type} 失敗：${detail?.message || (typeof detail === 'string' ? detail : 'Worker 未回傳有效結果。')}`);
+            if (detail?.name) error.name = detail.name;
+            if (detail?.stack) error.stack = `${error.name}: ${error.message}\nWorker stack:\n${detail.stack}`;
+            finish(error);
+        };
+        worker.onerror = event => {
+            const location = event.filename ? `（${event.filename}:${event.lineno || 0}:${event.colno || 0}）` : '';
+            finish(new Error(`獨立預設 ${type} Worker 載入或執行失敗：${event.message || '瀏覽器未提供原因；請重新整理並確認擴展檔案完整。'}${location}`));
+        };
+        worker.onmessageerror = () => finish(new Error(`獨立預設 ${type} 失敗：無法讀取 Worker 回傳的資料。`));
+        if (signal?.aborted) return abort();
         try { worker.postMessage({ type, payload }); } catch (error) { finish(error); }
     });
 }

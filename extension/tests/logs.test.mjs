@@ -62,15 +62,46 @@ test('third-party credential containers and token variants are masked while nume
     assert.match(result, /max_tokens":400/);
 });
 
-test('upstream errors cannot echo chat/workflow content unless detailed logging was enabled', () => {
+test('errors include the actual message, HTTP status and stack without detailed mode, in one redacted entry', () => {
     const store = createLogStore(), run = store.startRun({}, ['known-secret']);
-    const error = Object.assign(new Error('upstream echoed PRIVATE_CHAT known-secret'), { status: 422 });
+    const error = Object.assign(new Error('upstream rejected parameter width; echoed PRIVATE_CHAT known-secret'), { status: 422 });
     run.error('generation', error);
-    assert.doesNotMatch(exportLog(store), /PRIVATE_CHAT|known-secret/);
-    assert.match(exportLog(store), /422/);
-    store.setDetailed(true); run.error('generation', error);
+    assert.equal(store.detailed, false);
+    assert.equal(store.getEntries().length, 1);
+    assert.equal(store.getEntries()[0].level, 'error');
+    assert.match(exportLog(store), /upstream rejected parameter width/);
+    assert.match(exportLog(store), /HTTP 422/);
     assert.match(exportLog(store), /PRIVATE_CHAT/);
+    assert.match(JSON.parse(store.getEntries()[0].data).stack, /at TestContext/);
+    assert.doesNotMatch(exportLog(store), /known-secret|原始錯誤僅在詳細模式|原始錯誤（詳細模式）/);
+    store.setDetailed(true); run.error('generation', error);
+    assert.equal(store.getEntries().length, 2, 'Detailed mode must not duplicate the error as DEBUG');
     assert.doesNotMatch(exportLog(store), /known-secret/);
+});
+
+test('local and string errors stay useful without HTTP status or an empty metadata object', () => {
+    const store = createLogStore(), run = store.startRun();
+    run.error('analysis', new Error('獨立預設 prepare 失敗：正則語法無效'));
+    run.error('analysis', 'Worker unavailable');
+    run.error('analysis', undefined);
+    assert.match(exportLog(store), /正則語法無效/);
+    assert.match(exportLog(store), /Worker unavailable/);
+    assert.match(exportLog(store), /未知錯誤/);
+    assert.doesNotMatch(exportLog(store), /HTTP|\n\{\}/);
+    assert.ok(store.getEntries().every(entry => JSON.parse(entry.data).message));
+});
+
+test('error causes and codes survive logging without exposing credentials or binary data', () => {
+    const store = createLogStore(), run = store.startRun({}, ['known-secret']);
+    const cause = Object.assign(new Error('connect failed known-secret Bearer hidden-token'), { code: 'ECONNRESET' });
+    const error = Object.assign(new Error(`request failed data:image/png;base64,${PNG_BASE64}`, { cause }), { code: 'FETCH_FAILED' });
+    run.error('llm', error);
+    const data = JSON.parse(store.getEntries()[0].data);
+    assert.equal(data.code, 'FETCH_FAILED');
+    assert.equal(data.cause.code, 'ECONNRESET');
+    assert.match(data.cause.message, /connect failed/);
+    assert.doesNotMatch(exportLog(store), /known-secret|hidden-token/);
+    assert.ok(!exportLog(store).includes(PNG_BASE64));
 });
 
 test('ring buffer has entry and character limits and clear keeps live run usable', () => {
@@ -96,7 +127,8 @@ test('independent run IDs, safe errors, subscriber exceptions never affect jobs'
     a.error('llm', Object.assign(new Error('failed my-secret'), { status: 401 }));
     b.add('complete', 'ok');
     assert.notEqual(a.id, b.id); assert.equal(notifications, 2);
-    assert.doesNotMatch(exportLog(store), /my-secret|at TestContext/);
+    assert.doesNotMatch(exportLog(store), /my-secret/);
+    assert.match(exportLog(store), /at TestContext/);
     assert.match(exportLog(store), /401/);
     off(); store.clear(); assert.equal(notifications, 2);
 });

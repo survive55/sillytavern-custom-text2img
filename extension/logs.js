@@ -97,17 +97,17 @@ export function createLogStore({ maxEntries = 500, maxChars = 1024 * 1024, maxEn
                 id: runId, add,
                 detail(stage, message, data) { add(stage, message, { level: 'debug', data, detail: true }); },
                 error(stage, error) {
-                    // Provider errors may echo entire prompts or workflow bodies.
-                    // Default logs keep only an allowlisted summary and numeric status.
+                    // Errors are actionable without enabling prompt/body logging first.
+                    // add() still redacts credentials, omits image bytes and bounds the entry.
                     const status = Number.isInteger(error?.status) ? error.status : undefined;
-                    const descriptions = { 400: '請求或設定無效', 401: '憑證無效或登入過期', 402: '餘額不足或需付費方案',
-                        403: '權限不足', 404: '找不到資源或端點', 409: '任務衝突或設定不相容', 413: '內容超過大小限制',
-                        422: '參數不被接受', 429: '請求過於頻繁或額度不足', 499: '請求已取消', 502: '上游服務或網路錯誤',
-                        503: '服務暫時不可用', 504: '請求逾時' };
-                    add(stage, `操作失敗：${descriptions[status] || '請檢查此階段的設定、連線或服務回應'}。原始錯誤僅在詳細模式記錄；勿直接重複提交付費生圖。`,
-                        { level: 'error', data: { status } });
-                    add(stage, '原始錯誤（詳細模式）', { level: 'debug', detail: true,
-                        data: { message: String(error?.message || error), stack: error?.stack } });
+                    const message = String(error?.message || error || '未知錯誤');
+                    const data = { message, name: error?.name, status, code: error?.code, stack: error?.stack };
+                    if (error?.cause !== undefined) data.cause = {
+                        message: String(error.cause?.message || error.cause),
+                        name: error.cause?.name, code: error.cause?.code, stack: error.cause?.stack,
+                    };
+                    add(stage, `操作失敗${status === undefined ? '' : `（HTTP ${status}）`}：${message}\n勿直接重複提交付費生圖。`,
+                        { level: 'error', data });
                 },
             };
         },

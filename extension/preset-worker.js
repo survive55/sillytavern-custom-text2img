@@ -12,5 +12,9 @@ self.onmessage = ({ data }) => {
             default: throw new Error('未知的獨立預設操作。');
         }
         self.postMessage({ ok: true, result });
-    } catch (error) { self.postMessage({ ok: false, error: String(error?.message || error) }); }
+    } catch (error) {
+        self.postMessage({ ok: false, error: {
+            name: error?.name || 'Error', message: String(error?.message || error), stack: error?.stack,
+        } });
+    }
 };

@@ -18,6 +18,7 @@ async function main() {
     }];
     const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_EXECUTABLE_PATH || undefined });
     const network = [], errors = [];
+    let workerDelayMs = 0;
     try {
         const context = await browser.newContext({ viewport: { width: 1100, height: 950 } });
         const page = await context.newPage(); page.setDefaultTimeout(12000);
@@ -27,6 +28,8 @@ async function main() {
             if (url.origin === origin.origin && url.pathname === '/__cmi_preset_test__') return route.fulfill({ contentType: 'text/html', body: '<!doctype html><html><head><link rel="stylesheet" href="/fixture/style.css"></head><body><textarea id="send_textarea">MAIN CHAT SENTINEL</textarea><button id="send_but">Main send</button></body></html>' });
             if (url.origin === origin.origin && url.pathname.startsWith('/fixture/')) {
                 const name = url.pathname.slice('/fixture/'.length);
+                if (name === 'preset-worker.js' && workerDelayMs) return route.fulfill({ contentType: 'application/javascript',
+                    body: `const send = self.postMessage.bind(self); self.postMessage = (...args) => setTimeout(() => send(...args), ${workerDelayMs});\n${fs.readFileSync(path.join(source, name), 'utf8')}` });
                 if (RUNTIME_FILES.includes(name)) return route.fulfill({ path: path.join(source, name), contentType: name.endsWith('.css') ? 'text/css' : 'application/javascript' });
             }
             network.push({ url: url.href, method: route.request().method() }); return route.abort();
@@ -118,16 +121,44 @@ async function main() {
         assert.equal(await page.locator('#send_textarea').inputValue(), 'MAIN CHAT SENTINEL');
         await page.evaluate(() => { window.__dispose(); window.dispatchEvent(new MessageEvent('message', { data: { type: 'send-request', text: 'spoof' }, source: window })); });
         assert.equal(await page.evaluate(() => window.__proposals.length), 1);
-        const timeout = await page.evaluate(async () => {
+        workerDelayMs = 4500;
+        const slow = await page.evaluate(async () => {
             const { runPresetTask } = await import('/fixture/preset-worker-client.js');
             const { snapshotScene } = await import('/fixture/scene-text.js');
-            try { await runPresetTask('clean', { snapshot: snapshotScene([{ mes: 'a'.repeat(28) + '!' }], 0, 0),
-                bodyCleanupRules: JSON.stringify([{ findRegex: '/(a+)+$/', replaceString: '' }]) }, undefined, 100); return false; }
-            catch (error) { return error.message.includes('逾時'); }
+            const started = performance.now();
+            const result = await runPresetTask('clean', { snapshot: snapshotScene([{ mes: 'slow but valid scene' }], 0, 0), bodyCleanupRules: '[]' });
+            return { text: result.target.text, elapsed: performance.now() - started };
         });
-        assert.equal(timeout, true, 'Pathological regex must be terminated off the UI thread');
+        assert.equal(slow.text, 'slow but valid scene');
+        assert.ok(slow.elapsed >= 4500, 'Valid work must survive the old four-second limit');
+        workerDelayMs = 0;
+        const cancelled = await page.evaluate(async () => {
+            const { runPresetTask } = await import('/fixture/preset-worker-client.js');
+            const { snapshotScene } = await import('/fixture/scene-text.js');
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), 500);
+            try { await runPresetTask('clean', { snapshot: snapshotScene([{ mes: 'a'.repeat(100) + '!' }], 0, 0),
+                bodyCleanupRules: JSON.stringify([{ findRegex: '/(a+)+$/', replaceString: '' }]) }, controller.signal); return false; }
+            catch (error) { return error.name === 'AbortError'; }
+            finally { clearTimeout(timer); }
+        });
+        assert.equal(cancelled, true, 'Manual Stop must terminate pathological regex without freezing the UI');
+        const failure = await page.evaluate(async () => {
+            const { runPresetTask } = await import('/fixture/preset-worker-client.js');
+            const { snapshotScene } = await import('/fixture/scene-text.js');
+            const { createLogStore } = await import('/fixture/logs.js');
+            const store = createLogStore();
+            try { await runPresetTask('clean', { snapshot: snapshotScene([{ mes: 'scene' }], 0, 0), bodyCleanupRules: 'invalid JSON' }); }
+            catch (error) { store.startRun().error('analysis', error); }
+            return { detailed: store.detailed, entries: store.getEntries() };
+        });
+        assert.equal(failure.detailed, false);
+        assert.equal(failure.entries.length, 1);
+        assert.equal(failure.entries[0].level, 'error');
+        assert.match(failure.entries[0].message, /clean.*JSON/);
+        assert.match(JSON.parse(failure.entries[0].data).stack, /scene-text.js/);
         assert.deepEqual(network, []); assert.deepEqual(errors, []);
-        console.log(JSON.stringify({ ok: true, originalWidget: Boolean(fixturePath), worker: 'real module workers and timeout',
+        console.log(JSON.stringify({ ok: true, originalWidget: Boolean(fixturePath), worker: 'real module workers: >4s success, manual cancellation and detailed errors',
             isolation: ['assistant mes only', 'no main DOM/storage', 'native widget shim', 'no automatic sends', 'trusted parent confirmation', 'no display HTML in LLM history'], network, errors }, null, 2));
     } finally { await browser.close(); }
 }
