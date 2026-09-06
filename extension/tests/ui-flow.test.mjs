@@ -87,12 +87,21 @@ function fixture({ provider = 'novelai', configured = true, onSubmit = () => {},
         createManualLlmClient: options => createManualLlmClient({ fetchImpl: fakeFetch, ...options }), parseExtraHeaders,
         generateWithPolling: options => generateWithPolling({ ...options, delay: async signal => { await new Promise(resolve => setImmediate(resolve)); } }),
         createNovelAI: () => api, createPanelClient: connection => createPanelClient(connection, { fetchImpl: fakeFetch }),
-        saveBase64AsFile: async (...args) => { saves.push(args); return `/images/test-${saves.length}.png`; },
+        saveBase64AsFile: async (...args) => { saves.push(args); return `/user/images/test-${saves.length}.png`; },
     };
     vm.runInNewContext(`${source}\ngetSettings(); novelSessionToken = ${JSON.stringify(configured ? 'fake-novel-token' : '')};
         unlockedVaultFingerprint = JSON.stringify(getSettings().novelVault); novelSessionMode = 'memory';
-        globalThis.api = { onMessageButtonClick, onAnalyzeButtonClick, listProfiles, logs };`, sandbox, { filename: 'extension/index.js' });
-    return { logs: sandbox.api.logs, run: slot => sandbox.api.onMessageButtonClick(button, slot), analyze: () => sandbox.api.onAnalyzeButtonClick(button), profiles: () => sandbox.api.listProfiles(), close: () => api.close(), context, message, settings, calls, saves, notifications, prompts, reviews,
+        globalThis.api = { onMessageButtonClick, onAnalyzeButtonClick, generatePrompt, listProfiles, logs };`, sandbox, { filename: 'extension/index.js' });
+    // Image transport tests start from a saved scene, just like clicking a restored tag.
+    const run = (slot = 'fixture-scene') => {
+        if (slot === 'fixture-scene' && !inlineScenes.inlineSlots(message).length) {
+            message.mes += '\n\n[[cmi-image:fixture-scene]]';
+            message.extra ??= {};
+            message.extra[inlineScenes.INLINE_KEY] = { version: 1, slots: [{ id: slot, label: 'Forest', prompt: 'landscape, sunrise', images: [] }] };
+        }
+        return sandbox.api.onMessageButtonClick(button, slot);
+    };
+    return { logs: sandbox.api.logs, run, prompt: signal => sandbox.api.generatePrompt(context.chat.indexOf(message), message, signal ?? new AbortController().signal), analyze: () => sandbox.api.onAnalyzeButtonClick(button), profiles: () => sandbox.api.listProfiles(), close: () => api.close(), context, message, settings, calls, saves, notifications, prompts, reviews,
         get savedChats() { return savedChats; }, get rendered() { return rendered; } };
 }
 
@@ -100,7 +109,7 @@ test('generation logs cover stages with no prompts, chat, credentials or image b
     const f = fixture(); t.after(f.close);
     await f.run();
     const entries = f.logs.getEntries(), stages = entries.map(entry => entry.stage);
-    for (const stage of ['start', 'prepare', 'llm', 'submit', 'accepted', 'generation', 'download', 'save', 'attach', 'complete']) assert.ok(stages.includes(stage), stage);
+    for (const stage of ['start', 'prepare', 'prompt', 'submit', 'accepted', 'generation', 'download', 'save', 'attach', 'complete']) assert.ok(stages.includes(stage), stage);
     assert.equal(new Set(entries.map(entry => entry.runId)).size, 1);
     const text = JSON.stringify(entries);
     assert.doesNotMatch(text, /landscape|sunrise|forest|fake-novel-token|manual-secret-key|fake-panel-secret/);
@@ -108,25 +117,26 @@ test('generation logs cover stages with no prompts, chat, credentials or image b
     assert.match(text, /jobId/);
 });
 
-test('detailed generation logs record request, raw response and final payload but mask credential echoes', async t => {
-    const f = fixture({ provider: 'comfy-modal', review: true }); t.after(f.close);
+test('detailed scene logs record payloads but mask credential echoes', async t => {
+    const f = inlineFixture({ provider: 'comfy-modal', review: true }); t.after(f.close);
     f.logs.setDetailed(true);
-    f.message.mes += ' fake-panel-secret manual-secret-key';
-    f.context.ConnectionManagerRequestService.sendRequest = async () => 'landscape, fake-panel-secret, manual-secret-key';
-    await f.run();
+    f.message.mes += '\n fake-panel-secret manual-secret-key';
+    f.context.ConnectionManagerRequestService.sendRequest = async () => inlineReply.replace('forest, walking', 'forest, fake-panel-secret, manual-secret-key');
+    await f.analyze();
+    await f.run(inlineScenes.inlineSlots(f.message)[0].id);
     const text = JSON.stringify(f.logs.getEntries());
-    assert.match(text, /llm.request|llm.response|image.request/);
-    assert.match(text, /landscape/); assert.match(text, /edited/); assert.match(text, /forest clearing/);
+    for (const stage of ['llm.request', 'llm.response', 'image.request']) assert.ok(text.includes(stage));
+    assert.match(text, /forest/); assert.match(text, /edited/);
     assert.doesNotMatch(text, /fake-panel-secret|manual-secret-key|fake-novel-token/);
     assert.ok(!text.includes(PNG_BASE64));
 });
 
-test('logs preserve failure stage and cancellation without any image submit', async t => {
+test('logs preserve analysis failure and review cancellation without image submission', async t => {
     const f = fixture(); t.after(f.close);
     f.context.ConnectionManagerRequestService.sendRequest = async () => { throw new Error('broken manual-secret-key'); };
-    await f.run();
+    await f.analyze();
     assert.equal(f.calls.length, 0);
-    assert.ok(f.logs.getEntries().some(entry => entry.stage === 'llm' && entry.level === 'error'));
+    assert.ok(f.logs.getEntries().some(entry => entry.stage === 'analysis' && entry.level === 'error'));
     assert.doesNotMatch(JSON.stringify(f.logs.getEntries()), /manual-secret-key/);
     const cancelled = fixture({ review: true }); t.after(cancelled.close);
     cancelled.context.callGenericPopup = async () => null;
@@ -135,40 +145,39 @@ test('logs preserve failure stage and cancellation without any image submit', as
     assert.ok(cancelled.logs.getEntries().some(entry => entry.stage === 'cancel'));
 });
 
-test('stopping LLM waiting is a warning and never submits an image request', async t => {
+test('missing scene id never falls back to whole-message generation', async t => {
     const f = fixture(); t.after(f.close);
-    f.context.ConnectionManagerRequestService.sendRequest = async () => { await f.run(); return 'landscape'; };
-    await f.run();
-    assert.equal(f.calls.length, 0);
-    assert.ok(f.logs.getEntries().some(entry => entry.stage === 'stop' && entry.level === 'warn'));
-    assert.equal(f.logs.getEntries().some(entry => entry.stage === 'complete'), false);
+    await f.run(null);
+    assert.equal(f.calls.length, 0); assert.equal(f.prompts.length, 0); assert.equal(f.savedChats, 0);
+    assert.equal(f.message.extra, undefined);
 });
 
-test('real NovelAI button flow: direct official API, independent profile, prompt review, multiple gallery images', async t => {
+test('real NovelAI scene flow: direct official API, prompt review, batch metadata without gallery', async t => {
     const f = fixture({ review: true }); t.after(f.close);
     await f.run();
-    assert.equal(f.prompts.length, 1); assert.equal(f.prompts[0][0], 'independent'); assert.equal(f.prompts[0][3].includePreset, true);
-    assert.equal(f.saves.length, 2); assert.equal(f.savedChats, 1); assert.equal(f.rendered, 1);
-    assert.equal(f.message.extra.media.length, 2);
-    assert.equal(f.message.extra.media[0].seed, '0'); assert.equal(f.message.extra.media[1].seed, '1');
-    assert.equal(f.message.extra.media[0].source, 'generated'); assert.match(f.reviews[0], /NovelAI/);
-    assert.match(f.message.extra.media[0].title, /edited/);
+    const slot = inlineScenes.inlineSlots(f.message)[0];
+    assert.equal(f.prompts.length, 0);
+    assert.equal(f.saves.length, 2); assert.equal(f.savedChats, 1); assert.equal(f.rendered, 0);
+    assert.equal(f.message.extra.media, undefined); assert.equal(slot.images.length, 2);
+    assert.equal(slot.media[0].seed, '0'); assert.equal(slot.media[1].seed, '1');
+    assert.equal(slot.media[0].source, 'generated'); assert.match(f.reviews[0], /NovelAI/);
+    assert.match(slot.media[0].title, /edited/);
     assert.ok(!JSON.stringify(f.calls).includes('fake-panel-secret'));
     assert.ok(f.calls.every(call => call.url.startsWith('https://image.novelai.net/')));
     assert.equal(f.notifications.some(item => item.kind === 'error'), false);
 });
 
-test('manual OpenAI-compatible prompt mode bypasses Connection Manager and uses its own model and API key', async t => {
+test('manual OpenAI-compatible prompt helper uses its own model and API key without generating images', async t => {
     const f = fixture(); t.after(f.close);
     f.settings.promptConnectionMode = 'manual';
-    await f.run();
+    assert.match(await f.prompt(), /manual landscape/);
     assert.equal(f.prompts.length, 0);
     const llmCall = f.calls.find(call => call.url.endsWith('/chat/completions'));
     assert.ok(llmCall);
     assert.equal(llmCall.body.model, 'manual-model');
     assert.equal(llmCall.init.headers.Authorization, 'Bearer manual-secret-key');
     assert.equal(llmCall.body.messages[0].role, 'system');
-    assert.match(f.message.extra.media[0].title, /manual landscape/);
+    assert.equal(f.saves.length, 0);
 });
 
 for (const mode of ['manual', 'profile']) {
@@ -203,7 +212,7 @@ for (const mode of ['manual', 'profile']) {
         f.context.substituteParamsExtended = text => text.replaceAll('{{char}}', 'Bob').replaceAll('{{lastMessage}}', 'FUTURE CONTENT');
         f.context.CONNECT_API_MAP = { cc: { selected: 'openai' } };
         f.context.extensionSettings.connectionManager.profiles[0].api = 'cc';
-        await f.run();
+        await f.prompt();
         const body = mode === 'manual' ? f.calls.find(call => call.url.endsWith('/chat/completions')).body
             : { messages: f.prompts[0][1], max_tokens: f.prompts[0][2], ...f.prompts[0][4] };
         assert.equal(body.temperature, 0.3); assert.equal(body.max_tokens, 900);
@@ -215,7 +224,7 @@ for (const mode of ['manual', 'profile']) {
         ]);
         assert.deepEqual(imported.preset.prompts.filter(item => ['prefill', 'off', 'unlisted', 'in-chat'].includes(item.identifier))
             .map(item => [item.identifier, item.role]), [['prefill', 'model'], ['off', 'unknown'], ['unlisted', 'model'], ['in-chat', 'model']]);
-        assert.equal(f.saves.length, 2);
+        assert.equal(f.saves.length, 0);
         assert.equal(f.settings.systemPrompt.includes('expert prompt engineer'), true);
         assert.doesNotMatch(JSON.stringify(f.calls), /evil.invalid|FUTURE CONTENT/);
         if (mode === 'profile') assert.equal(f.prompts[0][3].includePreset, true);
@@ -231,8 +240,10 @@ test('real panel flow preserves presets, LoRAs, 64-bit seed and frozen connectio
     assert.equal(f.savedChats, 1);
     const submitted = f.calls.find(call => call.url.endsWith('/generate/jobs'));
     assert.equal(submitted.body.seed, '18446744073709551613'); assert.equal(submitted.body.loras[0].name, 'test-lora');
-    assert.match(submitted.body.prompt_text, /^masterpiece,/); assert.equal(f.message.extra.media[0].negative, 'blurry');
-    assert.equal(f.message.extra.media[0].seed, '18446744073709551613');
+    const slot = inlineScenes.inlineSlots(f.message)[0];
+    assert.match(submitted.body.prompt_text, /^masterpiece,/); assert.equal(slot.media[0].negative, 'blurry');
+    assert.equal(slot.media[0].seed, '18446744073709551613');
+    assert.equal(f.message.extra.media, undefined);
     for (const call of f.calls) {
         assert.ok(call.url.startsWith('https://panel.trycloudflare.com/api/browser/'));
         assert.equal(call.init.credentials, 'omit'); assert.ok(!JSON.stringify(call).includes('fake-novel-token'));
@@ -253,7 +264,7 @@ test('ST 1.14 profile checker errors only skip newer unsupported profiles', asyn
 test('missing selected preset fails before any paid request instead of falling back to templates', async t => {
     const f = fixture(); t.after(f.close);
     f.settings.promptPresetMode = 'preset'; f.settings.llmPresetId = 'missing';
-    await f.run();
+    await f.analyze();
     assert.equal(f.calls.length, 0); assert.equal(f.prompts.length, 0);
     assert.ok(f.notifications.some(item => item.kind === 'error' && item.args[0].includes('預設不存在')));
 });
@@ -279,7 +290,7 @@ test('a changed message is never replaced or attached to after generation', asyn
     assert.ok(f.notifications.some(item => item.kind === 'warning'));
 });
 
-test('preset variables never call ST macros and interactive mode always confirms images', async t => {
+test('legacy prompt helper keeps preset variables and conversations isolated without generating images', async t => {
     const f = fixture({ review: false, conversation: async ({ initial, onTurn, signal }) => {
         assert.equal(initial.raw, 'landscape, sunrise');
         const next = await onTurn('Use sunset', signal);
@@ -290,11 +301,11 @@ test('preset variables never call ST macros and interactive mode always confirms
     f.context.CONNECT_API_MAP = { cc: { selected: 'openai' } }; f.context.extensionSettings.connectionManager.profiles[0].api = 'cc';
     f.context.substituteParamsExtended = () => { throw new Error('Must not call ST macro engine'); };
     const before = JSON.stringify(f.context.extensionSettings.variables);
-    await f.run();
-    assert.equal(f.prompts.length, 2); assert.equal(f.reviews.length, 1);
+    await f.prompt();
+    assert.equal(f.prompts.length, 2); assert.equal(f.reviews.length, 0);
     assert.equal(f.prompts[1][1].at(-1).content, 'Use sunset');
     assert.equal(JSON.stringify(f.context.extensionSettings.variables), before);
-    assert.equal(f.saves.length, 2);
+    assert.equal(f.saves.length, 0);
 });
 
 test('cancelled independent dialog cannot submit an image even when normal review is disabled', async t => {
@@ -302,7 +313,7 @@ test('cancelled independent dialog cannot submit an image even when normal revie
     const imported = llmPresets.importLlmPreset(JSON.stringify({ main_prompt: 'Tags' }));
     Object.assign(f.settings, { promptPresetMode: 'preset', llmPresetId: 'interactive', llmPresets: [{ id: 'interactive', ...imported, interactive: true }] });
     f.context.CONNECT_API_MAP = { cc: { selected: 'openai' } }; f.context.extensionSettings.connectionManager.profiles[0].api = 'cc';
-    await f.run();
+    assert.equal(await f.prompt(), null);
     assert.equal(f.prompts.length, 1); assert.equal(f.saves.length, 0); assert.equal(f.calls.length, 0);
 });
 
@@ -314,7 +325,7 @@ test('template scene macros use assistant mes only and cleanup is opt-in', async
         f.message.extra = { reasoning: 'NEVER READ REASONING' };
         f.settings.userTemplate = '{{message}}|{{lastMessage}}|{{lastCharMessage}}|{{lastUserMessage}}';
         f.context.chat.push({ is_user: true, mes: 'NEVER READ USER' });
-        await f.run();
+        await f.prompt();
         const messages = JSON.stringify(f.prompts[0][1]);
         assert.doesNotMatch(messages, /NEVER READ/);
         assert.equal(messages.includes('inline thought'), cleanup === '[]');
@@ -347,7 +358,7 @@ for (const mode of ['template', 'preset']) {
                 f.context.CONNECT_API_MAP = { cc: { selected: 'openai' } };
                 f.context.extensionSettings.connectionManager.profiles[0].api = 'cc';
             }
-            await f.run();
+            await f.prompt();
             const messages = connection === 'profile' ? f.prompts[0]?.[1]
                 : f.calls.find(call => call.url.endsWith('/chat/completions'))?.body.messages;
             assert.ok(messages, 'A prompt request must be sent');
@@ -363,7 +374,7 @@ for (const mode of ['template', 'preset']) {
                 assert.ok(messages.slice(1).every(message => message.role === 'assistant'));
             }
             assert.deepEqual(f.context.chat.map(message => message.mes), input);
-            assert.equal(f.saves.length, 2);
+            assert.equal(f.saves.length, 0);
         });
     }
 }
@@ -394,15 +405,50 @@ test('manual analysis has no image-provider dependency; two slot clicks each sub
     await f.run(slots[0].id);
     assert.equal(f.prompts.length, 1, 'Clicking a planned image never calls the LLM again');
     assert.equal(slots[0].images.length, 2); assert.equal(slots[1].images.length, 0);
-    assert.equal(f.message.extra.media[0].title, '1girl, forest, walking');
-    assert.equal(f.message.extra.media[0].cmi_scene_id, slots[0].id);
+    assert.equal(slots[0].media[0].title, '1girl, forest, walking');
+    assert.equal(f.message.extra.media, undefined);
     await f.run(slots[1].id);
     assert.equal(f.prompts.length, 1); assert.equal(slots[1].images.length, 2);
-    assert.equal(f.message.extra.media[2].title, 'lake, sunset');
+    assert.equal(slots[1].media[0].title, 'lake, sunset');
+    assert.equal(f.message.extra.media, undefined);
     assert.equal(f.calls.filter(call => call.url.endsWith('/ai/generate-image')).length, 2);
     assert.equal(f.message.swipe_info[0].extra[inlineScenes.INLINE_KEY].slots[1].images.length, 2);
     await f.analyze(); assert.equal(f.prompts.length, 1, 'Existing plans are not silently overwritten');
     await f.run('unknown'); assert.equal(f.calls.filter(call => call.url.endsWith('/ai/generate-image')).length, 2);
+});
+
+test('regeneration replaces only the clicked scene and leaves unrelated gallery attachments untouched', async t => {
+    const f = inlineFixture(); t.after(f.close);
+    await f.analyze();
+    const slots = inlineScenes.inlineSlots(f.message);
+    const attachment = { url: '/user/images/original.png', type: 'image', title: 'Original attachment' };
+    const gallery = [attachment];
+    Object.assign(f.message.extra, { media: gallery, media_index: 0, media_display: 'list', inline_image: true });
+    await f.run(slots[0].id); await f.run(slots[1].id);
+    const oldImages = [...slots[0].images], second = structuredClone(slots[1]);
+    await f.run(slots[0].id);
+    assert.equal(f.prompts.length, 1);
+    assert.notDeepEqual(slots[0].images, oldImages);
+    assert.equal(slots[0].images.length, 2); assert.equal(slots[0].media.length, 4);
+    assert.deepEqual(structuredClone(slots[1]), second);
+    assert.equal(f.message.extra.media, gallery); assert.deepEqual(gallery, [attachment]);
+    assert.equal(f.message.extra.media_display, 'list'); assert.equal(f.message.extra.media_index, 0);
+    assert.equal(f.rendered, 0, 'New images never invoke the native gallery renderer');
+    assert.equal(f.message.swipe_info[0].extra[inlineScenes.INLINE_KEY].slots[0].media.length, 4);
+    assert.deepEqual(f.message.swipe_info[1], { extra: { untouched: true } });
+});
+
+test('stopping analysis via its progress toast never submits images or changes the body', async t => {
+    const f = inlineFixture(); t.after(f.close);
+    f.context.ConnectionManagerRequestService.sendRequest = async () => {
+        f.notifications.find(item => item.kind === 'info').args[2].onclick();
+        return inlineReply;
+    };
+    await f.analyze();
+    assert.equal(f.calls.length, 0); assert.equal(f.savedChats, 0);
+    assert.equal(f.message.mes, inlineBody);
+    assert.ok(f.logs.getEntries().some(entry => entry.stage === 'stop'));
+    assert.equal(f.logs.getEntries().some(entry => entry.stage === 'complete'), false);
 });
 
 test('analysis works without an unlocked image token and respects imported preset without launching HTML', async t => {
@@ -484,7 +530,7 @@ test('explicit save errors keep the plan for recovery and do not retry the LLM o
 test('rerendered competing controls cannot double-submit while analysis is waiting', async t => {
     const f = inlineFixture(); t.after(f.close);
     f.context.ConnectionManagerRequestService.sendRequest = async () => {
-        await f.analyze(); await f.run(); return inlineReply;
+        await f.analyze(); await f.run(null); return inlineReply;
     };
     await f.analyze(); assert.equal(f.calls.length, 0); assert.equal(f.savedChats, 1);
 });

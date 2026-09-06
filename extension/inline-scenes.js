@@ -77,6 +77,50 @@ export function inlineSlots(message) {
         && String(message.mes ?? '').includes(markerFor(slot.id)));
 }
 
+/** Move old tagged gallery entries into their scene without deleting image files/history.
+ * Only active, owned scenes are migrated; unrelated attachments and swipes stay intact.
+ * This is an in-memory migration, persisted by the next normal ST chat save.
+ */
+export function migrateInlineMedia(message) {
+    const media = message?.extra?.media;
+    if (!Array.isArray(media) || !media.length) return false;
+    // An incomplete/old plan with no displayable inline image is not a duplicate.
+    const slots = new Map(inlineSlots(message)
+        .filter(slot => Array.isArray(slot.images) && slot.images.some(safeInlineImage))
+        .map(slot => [slot.id, slot]));
+    const selected = media[message.extra.media_index ?? 0];
+    const remaining = [];
+    for (const item of media) {
+        const slot = slots.get(item?.cmi_scene_id);
+        if (!slot || !safeInlineImage(item?.url)) { remaining.push(item); continue; }
+        if (!Array.isArray(slot.media)) slot.media = [];
+        slot.media.push(item);
+    }
+    if (remaining.length === media.length) return false;
+    message.extra.media = remaining;
+    if (remaining.length) message.extra.media_index = Math.max(0, remaining.indexOf(selected));
+    else delete message.extra.media_index;
+    syncInlineSwipe(message);
+    return true;
+}
+
+/** ST's gallery renderer is async: a pre-migration render can finish late.
+ * Recognize only our archived entries, never an unrelated current attachment.
+ */
+export function hasStaleInlineGallery(root, message) {
+    if (!root) return false;
+    const archived = new Set(inlineSlots(message).flatMap(slot =>
+        (Array.isArray(slot.media) ? slot.media : [])
+            .filter(item => item?.cmi_scene_id === slot.id && safeInlineImage(item.url))
+            .map(item => item.url)));
+    if (!archived.size) return false;
+    const current = new Set((Array.isArray(message.extra?.media) ? message.extra.media : []).map(item => item?.url));
+    return Array.from(root.querySelectorAll('.mes_media_wrapper img')).some(image => {
+        const url = image.getAttribute('src');
+        return archived.has(url) && !current.has(url);
+    });
+}
+
 /** ST restores text and extra from swipe_info; save both only for the active swipe. */
 export function syncInlineSwipe(message) {
     const id = message.swipe_id;

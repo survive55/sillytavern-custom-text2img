@@ -8,8 +8,8 @@
 2. 本插件 → 提示詞生成 → LLM 提示詞來源 → **匯入的 Chat Completion LLM 預設**。
 3. 按 **匯入並選用 JSON**。最多 20 份、每份 2 MiB；同名另存編號，錯誤檔案不覆蓋原選擇。
 4. 多組順序可選 `character_id`。有全域 `100001` 時預選它；只有一組時直接選用；沒有全域且有多組時必須自行選擇。
-5. 選擇獨立 **Chat Completion Connection Manager profile**或**手動 OpenAI 相容 API**。點 assistant 樓層魔杖生成。
-6. 可勾選此預設的 **獨立提示詞對話／HTML 互動面板**。含啟用中顯示正則的新匯入會自動勾选面板，但不會自動執行 JS。
+5. 選擇獨立 **Chat Completion Connection Manager profile**或**手動 OpenAI 相容 API**。點 assistant 樓層「⋯」多圖圖示 **分析正文／插入生圖按鈕**；LLM 以 JSON 規劃多個場景，再逐一點標籤生圖。
+6. 已全面切換正文標籤模式：移除舊魔杖及獨立提示詞／HTML 面板入口，圖片只顯示在標籤位置，不追加底部圖集。下述獨立對話及 HTML 元件細節保留作舊版相容／開發參考，並非目前可操作流程。
 
 匯入只存到插件自己的擴展設定，**不寫入或切換 ST 主預設、不修改主聊天連線／角色卡／正則／腳本**。內容會隨 ST 設定備份，請勿任意公開。
 
@@ -83,7 +83,7 @@
 
 ## 連線與生成參數
 
-可攜參數：`temperature`、`top_p`、`frequency_penalty`、`presence_penalty`、非負整數 `seed`，亦接受對應舊欄位。`seed:-1` 不固定 seed。`openai_max_tokens` 優先於插件上限。
+可攜參數：`temperature`、`top_p`、`frequency_penalty`、`presence_penalty`、非負整數 `seed`，亦接受對應舊欄位。`seed:-1` 不固定 seed。正文分析一律使用專用「正文分析回應 token 上限」（預設 2400），取代 `openai_max_tokens`。
 
 - 手動 API 只增加上述參數，URL／端點／模型／驗證永遠由使用者的連線欄位決定。
 - Connection Manager 透過官方 `sendRequest`，保留**既有可信連線 profile 引用的 CC preset**作為 transport／驗證設定；匯入可攜參數透過第五參數覆寫。不重複組裝連線 preset 的 prompts。
@@ -93,7 +93,7 @@
 ## 相容與遷移
 
 - 最低 ST 1.14.0，需支援 module Worker／現代 Web API 的瀏覽器。JS 互動另需 credentialless（如新版 Chromium）。
-- 模板、Text Completion／Instruct、圖片參數及圖集保留；樓層來源按新規則限定 assistant 正文。
+- 模板、Text Completion／Instruct 與圖片參數保留；樓層來源按新規則限定 assistant 正文。新圖片只進入標籤；可對應目前標籤的舊 `cmi_scene_id` 圖集项移入場景歷史，不刪圖片檔或無關附件。
 - 切回模板不刪預設。刪除預設需確認，然後恢復模板。
 - **旧版已匯入項目需重新匯入原始 JSON**才能恢復未保存的 Regex 或早期被改寫的 role。沒有原始資料時不猜測重建。已保存正確 `prompt_order` 的項目，更新並重整後即採用新的啟用判定，不必為 `prompts[].enabled` 的衝突重新匯入；若舊資料的順序開關曾被改寫，則需重新匯入原始 JSON。
 - 已保存正確 `role: user` 的預設，更新並重整後即套用一般提示詞排除規則與歷史／範例容器例外，不需重新匯入；原始 JSON 與插件保存內容不會被刪改。修復 `667eb74` 將 user-role `chatHistory` 容器誤當 user 指令，導致其 assistant 正文全數被排除的回歸。

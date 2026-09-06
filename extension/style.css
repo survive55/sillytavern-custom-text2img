@@ -53,7 +53,7 @@
     font-family: var(--monoFontFamily, monospace);
 }
 
-.mes_button.cmi_message_gen.cmi_busy {
+.mes_button.cmi_message_analyze.cmi_busy {
     color: var(--active, #6fbf73);
 }
 

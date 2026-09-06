@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { INLINE_KEY, scenePlanInstruction, parseScenePlan, inlineSlots, markerFor, stripSceneMarkers, syncInlineSwipe, safeInlineImage } from '../inline-scenes.js';
+import { INLINE_KEY, scenePlanInstruction, parseScenePlan, inlineSlots, markerFor, stripSceneMarkers, syncInlineSwipe, safeInlineImage, migrateInlineMedia, hasStaleInlineGallery } from '../inline-scenes.js';
 import { snapshotScene } from '../scene-text.js';
 const body = '她走進樹林。\n\n晚霞照亮湖面。';
 const scenes = [
@@ -63,6 +63,62 @@ test('only current swipe receives the modified text and a detached metadata copy
     assert.equal(message.swipes[1], result.mes); assert.equal(message.swipe_info[1].send_date, 'date');
     assert.deepEqual(message.swipe_info[1].extra, message.extra);
     assert.notEqual(message.swipe_info[1].extra, message.extra);
+});
+
+test('legacy tagged gallery entries move into scene history without losing metadata or other attachments', () => {
+    const result = plan();
+    const old = { url: '/user/images/old.png', cmi_scene_id: 'scene-1', seed: '0', title: 'old prompt' };
+    const current = { url: '/user/images/current.png', cmi_scene_id: 'scene-1', seed: '1' };
+    const unrelated = { url: '/user/images/attachment.png', title: 'Keep me' };
+    const unknown = { url: '/user/images/unknown.png', cmi_scene_id: 'not-our-slot' };
+    result.slots[0].images = [current.url];
+    const message = { mes: result.mes, swipe_id: 0, swipes: [result.mes, 'other'], swipe_info: [{}, { extra: { untouched: true } }],
+        extra: { [INLINE_KEY]: { version: 1, slots: result.slots }, media: [old, current, unrelated, unknown], media_index: 2, media_display: 'gallery', inline_image: true } };
+    assert.equal(migrateInlineMedia(message), true);
+    assert.deepEqual(message.extra.media, [unrelated, unknown]);
+    assert.equal(message.extra.media_index, 0);
+    assert.deepEqual(result.slots[0].media, [old, current]);
+    assert.deepEqual(result.slots[0].images, [current.url]);
+    assert.deepEqual(message.swipe_info[0].extra, message.extra);
+    assert.deepEqual(message.swipe_info[1].extra, { untouched: true });
+    assert.equal(migrateInlineMedia(message), false, 'Migration is idempotent');
+    assert.equal(result.slots[0].media.length, 2);
+});
+
+test('legacy cleanup handles a duplicate-only gallery but does not guess ownership from URLs', () => {
+    const result = plan();
+    const image = { url: '/user/images/test.png', cmi_scene_id: 'scene-1' };
+    const message = { mes: result.mes, extra: { [INLINE_KEY]: { version: 1, slots: result.slots }, media: [image], media_index: 0 } };
+    assert.equal(migrateInlineMedia(message), false, 'Incomplete plans must not lose their only visible image');
+    result.slots[0].images = [image.url];
+    assert.equal(migrateInlineMedia(message), true);
+    assert.deepEqual(message.extra.media, []);
+    assert.equal(message.extra.media_index, undefined);
+    message.extra.media = [{ url: image.url }];
+    assert.equal(migrateInlineMedia(message), false);
+    message.extra.media = [image]; message.mes = 'marker removed';
+    assert.equal(migrateInlineMedia(message), false, 'Removed markers keep their legacy attachments');
+    message.mes = result.mes; message.extra.media = [{ ...image, url: 'https://untrusted.invalid/test.png' }];
+    assert.equal(migrateInlineMedia(message), false);
+});
+
+test('late legacy gallery writes are detected without removing current or unrelated attachments', () => {
+    const result = plan();
+    const url = '/user/images/legacy.png', other = '/user/images/unrelated.png';
+    result.slots[0].media = [{ url, cmi_scene_id: 'scene-1' }];
+    const message = { mes: result.mes, extra: { [INLINE_KEY]: { version: 1, slots: result.slots }, media: [] } };
+    const root = paths => ({ querySelectorAll: selector => {
+        assert.equal(selector, '.mes_media_wrapper img');
+        return paths.map(path => ({ getAttribute: () => path }));
+    } });
+    assert.equal(hasStaleInlineGallery(root([url]), message), true);
+    assert.equal(hasStaleInlineGallery(root([other]), message), false);
+    assert.equal(hasStaleInlineGallery(root([]), message), false);
+    message.extra.media = [{ url }];
+    assert.equal(hasStaleInlineGallery(root([url]), message), false, 'Explicit current attachment wins over archived URLs');
+    message.extra.media = []; message.mes = 'different swipe';
+    assert.equal(hasStaleInlineGallery(root([url]), message), false);
+    assert.equal(hasStaleInlineGallery(null, message), false);
 });
 
 test('inline images reject remote, data, relative and backslash URLs', () => {
