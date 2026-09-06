@@ -712,8 +712,10 @@ function showLlmPresetSettings() {
         $order.val(record.orderId || '');
         const order = getPresetOrder(preset, record.orderId);
         const count = order.filter(entry => entry.enabled).length;
+        const orderedIds = new Set(order.map(entry => entry.identifier));
+        const unlisted = preset.prompts.filter(item => !orderedIds.has(item.identifier)).length;
         const max = preset.openai_max_tokens ?? settings.maxTokens;
-        setStatus('#cmi_llm_preset_status', [`已選用：${record.name}；啟用 ${count} 項，依 quiet 觸發條件送出，回應上限 ${max} tokens。`,
+        setStatus('#cmi_llm_preset_status', [`已選用：${record.name}；啟用 ${count} 項／停用 ${order.length - count} 項，未列入順序 ${unlisted} 項；依 quiet 觸發條件送出，回應上限 ${max} tokens。`,
             ...(record.warnings || [])].join('\n'));
     } catch (error) {
         setStatus('#cmi_llm_preset_status', String(error?.message || error), 'error');

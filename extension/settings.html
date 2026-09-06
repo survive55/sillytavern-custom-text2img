@@ -163,7 +163,7 @@
                         <select id="cmi_llm_preset_order" class="text_pole"></select>
                         <small id="cmi_llm_preset_status" class="cmi-status" aria-live="polite"></small>
                         <small class="cmi-hint">匯入 ST Chat Completion 預設（prompts / prompt_order），或舊版 main_prompt / nsfw_prompt / jailbreak_prompt。只存入本插件，不切換或覆蓋 ST 主預設。API 網址、金鑰、Headers 與模型仍由上方連線決定。</small>
-                        <small class="cmi-hint">按啟用狀態、角色、相對順序與 In-Chat 深度組裝訊息，生成類型為 quiet。Chat History 放入所選前文與目標樓層，不讀取之後的樓層；未列出此 marker 時自動放入場景，明確停用則不放入（可改用 \{{message}}）。此模式不附加下方舊 System / User 模板。</small>
+                        <small class="cmi-hint">提示詞本身或所選順序任一處 enabled:false 都保持關閉；順序未明確啟用的條目也不送出。按角色、相對順序與 In-Chat 深度組裝訊息，生成類型為 quiet。Chat History 放入所選前文與目標樓層，不讀取之後的樓層；未列出此 marker 時自動放入場景，明確停用則不放入（可改用 \{{message}}）。此模式不附加下方舊 System / User 模板。</small>
                         <small class="cmi-hint">支援角色、Persona、場景與文字範例；不執行世界書掃描、第三方 Regex／腳本、工具或完整聊天生成流程。匯入後請閱讀上方相容性提示。Text Completion / Instruct 連線請使用原模板模式。</small>
                     </div>
                     <label for="cmi_max_tokens">最大回應 token 數（原模板／LLM 預設未指定時）</label><input id="cmi_max_tokens" class="text_pole" type="number" min="16" max="4096" step="1" />

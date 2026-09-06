@@ -12,12 +12,37 @@ const fixture = (prompts, order = prompts.map(item => o(item.identifier)), extra
 const history = [{ role: 'user', content: 'Before' }, { role: 'assistant', content: 'Scene' }];
 const build = (raw, extra = {}) => buildPresetMessages(normalizeLlmPreset(raw).preset, { history, ...extra });
 
-test('CC uses order.enabled and order identifiers, not storage order or prompt.enabled', () => {
-    const raw = fixture([p('phi', 'Tags only'), p('off'), p('unlisted'), p('main', 'Draw', { enabled: false }), p('chatHistory', 'must not be sent', { marker: true })],
-        [o('main'), o('off', false), o('chatHistory'), o('phi')]);
-    const before = structuredClone(raw);
-    assert.deepEqual(build(raw), [{ role: 'system', content: 'Draw' }, ...history, { role: 'system', content: 'Tags only' }]);
-    assert.deepEqual(raw, before);
+test('either false vetoes activation without rewriting either source switch', () => {
+    for (const promptEnabled of [true, false, undefined]) {
+        for (const orderEnabled of [true, false, undefined]) {
+            const raw = fixture([p('candidate', 'Candidate', { enabled: promptEnabled }), p('chatHistory')],
+                [{ identifier: 'candidate', enabled: orderEnabled }, o('chatHistory')]);
+            const before = structuredClone(raw);
+            const { preset } = importLlmPreset(JSON.stringify(raw));
+            const enabled = orderEnabled === true && promptEnabled !== false;
+            const expected = enabled ? [{ role: 'system', content: 'Candidate' }, ...history] : history;
+            assert.deepEqual(buildPresetMessages(preset, { history }), expected);
+            assert.equal(getPresetOrder(preset)[0].enabled, enabled);
+            assert.equal(preset.prompts[0].enabled, promptEnabled);
+            assert.equal(Object.hasOwn(preset.prompts[0], 'enabled'), promptEnabled !== undefined);
+            assert.equal(preset.prompt_order[0].order[0].enabled, orderEnabled === true, 'Keep the source order switch');
+            const reloaded = normalizeLlmPreset(JSON.parse(JSON.stringify(preset))).preset;
+            assert.deepEqual(reloaded, preset);
+            assert.deepEqual(buildPresetMessages(reloaded, { history }), expected);
+            assert.deepEqual(raw, before);
+        }
+    }
+});
+
+test('disabled and unlisted prompts are never expanded, irrespective of storage order', () => {
+    const raw = fixture([p('phi', 'Tags only'), p('off', 'ORDER OFF', { enabled: true }),
+        p('unlisted', 'UNLISTED', { enabled: true }), p('main', 'PROMPT OFF', { enabled: false }),
+        p('chatHistory', 'must not be sent', { marker: true })],
+    [o('main'), o('off', false), o('chatHistory'), o('phi')]);
+    const expanded = [];
+    assert.deepEqual(build(raw, { expand: text => { expanded.push(text); return text; } }),
+        [...history, { role: 'system', content: 'Tags only' }]);
+    assert.deepEqual(expanded, ['Tags only']);
 });
 
 test('imports preserve model and unknown roles without activating unused prompts or changing the source', () => {
@@ -27,7 +52,7 @@ test('imports preserve model and unknown roles without activating unused prompts
         // Regression: a valid full preset can retain model-role prompts outside every order.
         ...Array.from({ length: 4 }, (_, i) => p(`unlisted-${i}`, 'Not in order', { role: 'model' })),
         p('quiet-off', 'Not for quiet', { role: 'tool', injection_trigger: ['normal'] }),
-        p('prefill', 'A quiet landscape', { role: 'model', enabled: false }),
+        p('prefill', 'A quiet landscape', { role: 'model', enabled: true }),
         p('main', 'Describe the scene', { role: 'user' }),
         p('chatHistory', '', { marker: true }),
     ], [o('main'), o('off', false), o('chatHistory'), o('empty'), o('quiet-off'), o('prefill')]);
@@ -125,6 +150,45 @@ test('missing prompt_order uses ST built-in order without activating arbitrary c
     assert.deepEqual(buildPresetMessages(preset, { history }), [p('main'), ...history, p('jailbreak')].map(({ role, content }) => ({ role, content })));
 });
 
+test('prompt-level false survives all import formats and order switches', () => {
+    const prompts = [p('off', 'NEVER', { enabled: false }), p('on'), p('chatHistory', '', { enabled: false })];
+    const orders = [o('off'), o('on'), o('chatHistory')];
+    const raw = { prompts, prompt_order: [{ character_id: 100000, order: orders }, { character_id: 100001, order: orders }] };
+    const formats = [raw, ...['full', 'character'].map(type => ({ version: 1, type, data: { prompts, prompt_order: orders } }))];
+    for (const format of formats) {
+        const { preset } = importLlmPreset(JSON.stringify(format));
+        for (const { character_id: orderId } of preset.prompt_order) {
+            assert.deepEqual(getPresetOrder(preset, orderId), [o('off', false), o('on'), o('chatHistory', false)]);
+            assert.deepEqual(buildPresetMessages(preset, { orderId, history }), [{ role: 'system', content: 'on' }]);
+        }
+        assert.deepEqual(normalizeLlmPreset(JSON.parse(JSON.stringify(preset))).preset, preset);
+    }
+});
+
+test('default order and partial-history fallback never re-enable an explicitly disabled prompt', () => {
+    const raw = { prompts: [p('main', 'OFF', { enabled: false }), p('jailbreak', 'Tags'),
+        p('chatHistory', '', { enabled: false }), p('custom', 'UNLISTED', { enabled: true })] };
+    for (const value of [raw, { ...raw, prompt_order: [{ character_id: 100001, order: [o('main'), o('jailbreak')] }] }]) {
+        const { preset } = normalizeLlmPreset(value);
+        assert.deepEqual(buildPresetMessages(preset, { history }), [{ role: 'system', content: 'Tags' }]);
+    }
+});
+
+test('large preset regression: 30 order-on entries become 11 enabled, not all 144 prompts', () => {
+    // Synthetic metadata only; no private user prompt text is committed.
+    const raw = fixture(Array.from({ length: 144 }, (_, index) => p(`p${index}`, `Text ${index}`,
+        index >= 11 ? { enabled: false } : {})),
+    Array.from({ length: 62 }, (_, index) => o(`p${index}`, index < 30)));
+    const { preset } = importLlmPreset(JSON.stringify(raw));
+    const order = getPresetOrder(preset);
+    assert.equal(order.filter(item => item.enabled).length, 11);
+    assert.equal(order.filter(item => !item.enabled).length, 51);
+    assert.equal(preset.prompts.length - order.length, 82);
+    assert.equal(preset.prompt_order[0].order.filter(item => item.enabled).length, 30, 'Preserve original order switches');
+    assert.deepEqual(buildPresetMessages(preset, { history: [] }),
+        Array.from({ length: 11 }, (_, index) => ({ role: 'system', content: `Text ${index}` })));
+});
+
 test('Prompt Manager version 1 exports use nested data and a flat active order', () => {
     for (const type of ['full', 'character']) {
         const imported = importLlmPreset('\uFEFF' + JSON.stringify({ version: 1, type, data: {
@@ -158,6 +222,9 @@ test('duplicate prompts keep last definition, duplicate order entries and invali
     assert.equal(preset.prompts[0].content, 'new'); assert.equal(warnings.length, 1);
     assert.throws(() => normalizeLlmPreset(fixture([p('a')], [o('a'), o('a')])), /重複/);
     assert.throws(() => normalizeLlmPreset(fixture([p('a')], [{ identifier: 'a', enabled: 'false' }])), /布林/);
+    for (const enabled of ['false', 0, null, {}, []]) {
+        assert.throws(() => normalizeLlmPreset(fixture([p('a', 'Invalid', { enabled })])), /布林/);
+    }
     assert.deepEqual(build(fixture([p('a'), p('chatHistory')], [{ identifier: 'a' }, o('chatHistory')])), history);
 });
 

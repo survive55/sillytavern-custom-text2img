@@ -117,7 +117,9 @@ for (const mode of ['manual', 'profile']) {
                 { identifier: 'chatHistory', marker: true },
                 { identifier: 'jailbreak', role: 'user', content: 'Tags only' },
                 { identifier: 'prefill', role: 'model', content: 'landscape,' },
-                { identifier: 'off', role: 'unknown', content: 'disabled' },
+                { identifier: 'off', role: 'unknown', content: 'disabled', enabled: true },
+                { identifier: 'prompt-off', role: 'system', content: 'PROMPT OFF {{lastMessage}}', enabled: false },
+                { identifier: 'in-chat-off', role: 'user', content: 'DEPTH OFF', enabled: false, injection_position: 1, injection_depth: 0 },
                 { identifier: 'unlisted', role: 'model', content: 'UNLISTED' },
                 { identifier: 'in-chat', role: 'model', content: 'IGNORED IN-CHAT', injection_position: 1, injection_depth: 0 },
             ],
@@ -125,6 +127,7 @@ for (const mode of ['manual', 'profile']) {
                 { identifier: 'main', enabled: true }, { identifier: 'chatHistory', enabled: true },
                 { identifier: 'jailbreak', enabled: true }, { identifier: 'prefill', enabled: true },
                 { identifier: 'off', enabled: false }, { identifier: 'in-chat', enabled: true },
+                { identifier: 'prompt-off', enabled: true }, { identifier: 'in-chat-off', enabled: true },
             ] }],
         }), 'image.json');
         Object.assign(f.settings, { promptConnectionMode: mode, promptPresetMode: 'preset', llmPresetId: 'test', llmPresets: [{ id: 'test', ...imported }] });

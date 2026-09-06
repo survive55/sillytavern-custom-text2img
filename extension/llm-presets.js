@@ -54,7 +54,8 @@ function normalizeOrder(order) {
         if (seen.has(entry.identifier)) fail('同一順序重複引用 identifier。');
         seen.add(entry.identifier);
         if (entry.enabled !== undefined && typeof entry.enabled !== 'boolean') fail('enabled 必須是布林值。');
-        // ST tests entry.enabled, not prompt.enabled. Missing is disabled.
+        // An order must explicitly opt in; a missing switch stays disabled.
+        // The prompt-level false veto is applied later by getPresetOrder.
         return { identifier: entry.identifier, enabled: entry.enabled === true };
     });
 }
@@ -86,6 +87,7 @@ export function normalizeLlmPreset(raw) {
         if (!plain(item) || typeof item.identifier !== 'string' || !item.identifier) fail('提示詞缺少 identifier。');
         if (map.has(item.identifier)) warnings.push('重複 identifier 已按 ST 匯入規則保留最後一項。');
         if (item.content !== undefined && typeof item.content !== 'string') fail('content 必須是字串。');
+        if (item.enabled !== undefined && typeof item.enabled !== 'boolean') fail('提示詞 enabled 必須是布林值。');
         if (item.injection_trigger !== undefined && (!Array.isArray(item.injection_trigger)
             || item.injection_trigger.some(trigger => typeof trigger !== 'string'))) fail('injection_trigger 必須是字串陣列。');
         const marker = item.marker === true || MARKERS.includes(item.identifier);
@@ -94,6 +96,9 @@ export function normalizeLlmPreset(raw) {
             // ST import stores roles as-is, including roles in unused prompts.
             // Defaults and In-Chat role filtering belong to message assembly.
             ...(Object.hasOwn(item, 'role') ? { role: structuredClone(item.role) } : {}),
+            // Keep both source switches across saves/reloads. Either false is a
+            // veto; getPresetOrder computes the effective state without rewriting them.
+            ...(item.enabled !== undefined ? { enabled: item.enabled } : {}),
             content: item.content ?? '', marker,
             injection_position: numeric(item.injection_position ?? 0, 'injection_position', 0, 1, true),
             injection_depth: numeric(item.injection_depth ?? 4, 'injection_depth', 0, 10000, true),
@@ -157,7 +162,12 @@ export function getPresetOrder(preset, orderId) {
         : preset.prompt_order.length === 1 ? String(preset.prompt_order[0].character_id) : '');
     const order = preset.prompt_order.find(entry => String(entry.character_id) === id)?.order;
     if (!order) fail('請選擇有效的預設提示詞順序（character_id）。');
-    return order;
+    const byId = new Map(preset.prompts.map(item => [item.identifier, item]));
+    // Intentionally stricter than native ST: an explicit false in either place
+    // wins. Preserve the original switches so saving/reloading cannot lose a veto.
+    return order.map(entry => ({ ...entry,
+        enabled: entry.enabled === true && byId.get(entry.identifier)?.enabled !== false,
+    }));
 }
 
 /** ST injects into reverse history, then reverses it: order asc, assistant/user/system. */
@@ -272,7 +282,7 @@ export function buildPresetMessages(preset, { orderId = '', history = [], fields
     }
     // Partial prompt exports sometimes omit chatHistory entirely. Supply the
     // selected scene, but never re-enable an explicitly disabled history marker.
-    if (!order.some(entry => entry.identifier === 'chatHistory')) {
+    if (!order.some(entry => entry.identifier === 'chatHistory') && byId.get('chatHistory')?.enabled !== false) {
         historyIndex = phiIndex < 0 ? result.length : phiIndex;
         result.splice(historyIndex, 0, { history: true });
     }
