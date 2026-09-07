@@ -34,7 +34,7 @@ for (const { name, directory, prefix } of layouts) {
     test(`${name}: browser imports resolve at the correct directory depth`, () => {
         const entry = new URL(`https://st.example/scripts/extensions/third-party/${pkg.name}/${prefix}index.js`);
         const uiDirectory = new URL('.', entry).pathname;
-        const hostModules = new Set(['/scripts/utils.js', '/scripts/constants.js']);
+        const hostModules = new Set(['/scripts/utils.js', '/scripts/constants.js', '/scripts/openai.js']);
         const resolvedImports = [...source.matchAll(/^import .* from ['"]([^'"]+)['"];$/gm)]
             .map(match => new URL(match[1], entry).pathname);
         assert.ok(resolvedImports.length >= 4);

@@ -167,3 +167,12 @@
 .cmi-inline-scene img { display: block; max-width: 100%; max-height: 75vh; object-fit: contain; margin: 8px 0; border-radius: 6px; }
 .cmi-inline-settings { margin: 10px 0; padding: 8px; border: 1px solid var(--SmartThemeBorderColor); border-radius: 6px; }
 .cmi_message_analyze.cmi_busy { color: var(--active, #6fbf73); }
+
+#cmi_mcp_section { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+#cmi_mcp_section summary { cursor: pointer; padding: 6px 0; }
+#cmi_mcp_section .flex-container { flex-wrap: wrap; }
+#cmi_mcp_section .menu_button { display: inline-flex; width: auto; height: auto; max-width: 100%; padding: 6px 8px; white-space: normal; }
+#cmi_mcp_section .text_pole { max-width: 100%; min-width: 0; box-sizing: border-box; }
+#cmi_mcp_status { display: block; white-space: pre-wrap; overflow-wrap: anywhere; }
+#cmi_mcp_tools .checkbox_label { min-width: 0; overflow-wrap: anywhere; }
+#cmi_mcp_tools input { flex-shrink: 0; }

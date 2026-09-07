@@ -1,7 +1,7 @@
 {
     "name": "sillytavern-custom-text2img",
-    "version": "3.2.0",
-    "description": "Browser-only SillyTavern illustrations with ComfyUI/Modal and NovelAI; no extra ST server plugin required",
+    "version": "3.3.0",
+    "description": "Browser-only SillyTavern illustrations with ComfyUI/Modal, NovelAI and Anima MCP; no extra ST server plugin required",
     "private": true,
     "license": "Apache-2.0",
     "type": "commonjs",
@@ -14,6 +14,7 @@
         "check": "node scripts/check.cjs",
         "test:ui": "node scripts/smoke-ui.cjs",
         "test:preset-ui": "node scripts/smoke-preset.cjs",
+        "test:mcp-ui": "node scripts/smoke-mcp-ui.cjs",
         "install-ui": "node scripts/install-ui.cjs"
     },
     "dependencies": {

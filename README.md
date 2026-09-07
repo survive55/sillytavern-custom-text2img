@@ -75,6 +75,18 @@ GitHub 安裝下載的檔案已包含完整瀏覽器程式，不需要安裝後�
 
 實作依照 [ST UI Extensions 的 Context／聊天與事件 API](https://docs.sillytavern.app/for-contributors/writing-extensions/)；無需伺服器重啟。
 
+## Anima ComfyUI MCP（v3.3）
+
+新增選配的 **Anima MCP 提示詞工具＋手動生圖來源**，需要搭配 Mcp-image 專案的 `browser_server.py` HTTP 入口；ST 本身仍是純網頁擴展，舊來源不受影響。
+
+- 分析 LLM 只可呼叫勾選的 Anima 查詢／改編／組裝／校驗工具，可選讀取 `pomelo://SKILL.md`。生圖工具不交給 LLM，仍只在點正文按鈕時呼叫。
+- MCP Token 綁定端點，只存目前分頁；重整／換網址後重新套用。測試連線／dry-run 不喚醒 GPU。
+- 圖片以 MCP image blocks 安全回傳，不讀取任意主機路徑；64-bit Seed 不失真。
+- 手動 OpenAI 相容工具模型可用；Connection Manager 工具傳輸需明確選用受限安全模式。原生 Claude／Gemini／Cohere、Text Completion 與需要專用適配的 o 系／GPT-5 暫不支援工具模式；一般非 MCP 流程不變。
+- 關閉 MCP 不改寫原 LLM 設定。停止等待不取消 GPU、不自動重送付費呼叫。
+
+**部署步驟、完整限制與測試方式：[Anima MCP 使用說明](docs/anima-mcp.md)。**
+
 ## NovelAI
 
 不需要 ComfyUI、Modal、控制面板網址或 ST 的 NovelAI 主連線設定。

@@ -12,6 +12,7 @@
 
 // ST imports must not depend on whether the UI is at the repo root or in extension/.
 import { saveBase64AsFile } from '/scripts/utils.js';
+import { proxies as mcpProxyPresets } from '/scripts/openai.js';
 import { MEDIA_SOURCE, MEDIA_TYPE, SCROLL_BEHAVIOR } from '/scripts/constants.js';
 import { generateWithPolling } from './generation.js';
 import { createLogStore, logSecrets } from './logs.js';
@@ -19,6 +20,10 @@ import { mountLogPanel } from './logs-ui.js';
 import { PROVIDER_DEFAULTS, migrateSettings, providerConnection, buildNovelPayload } from './providers.js';
 import { createPanelClient } from './panel.js';
 import { createNovelAI } from './novelai.js';
+import { MCP_DEFAULTS, buildMcpPayload } from './mcp-client.js';
+import { createMcpImages } from './mcp-images.js';
+import { createMcpUi } from './mcp-ui.js';
+import { assertMcpLlmSupport, profileFingerprint, runMcpPromptLoop, sendMcpTurn } from './mcp-prompts.js';
 import { encryptToken, decryptToken } from './token-vault.js';
 import { normalizeToken } from './http.js';
 import { createManualLlmClient, parseExtraHeaders } from './manual-llm.js';
@@ -32,13 +37,15 @@ import { INLINE_KEY, INLINE_DEFAULTS, sceneLimit, buildSceneTargets, scenePlanIn
 const EXTENSION_FOLDER = new URL('.', import.meta.url).pathname
     .replace(/^\/scripts\/extensions\//, '').replace(/\/$/, '');
 const novelai = createNovelAI();
+const mcpImages = createMcpImages();
+const mcpUi = createMcpUi();
 const manualLlm = createManualLlmClient();
 let novelSessionToken = '', unlockedVaultFingerprint = '', novelSessionMode = '';
 let cachedPanel = null, cachedPanelKey = '';
 const BUSY_CLASS = 'cmi_busy';
 const LOG_PREFIX = '[SillyTavernCustomText2Img]';
 const logs = createLogStore();
-const startLog = (provider, messageId, settings = getSettings()) => logs.startRun({ provider, messageId }, logSecrets(settings, novelSessionToken));
+const startLog = (provider, messageId, settings = getSettings()) => logs.startRun({ provider, messageId }, [...logSecrets(settings, novelSessionToken), mcpUi.token]);
 
 const DEFAULT_SYSTEM_PROMPT = [
     'You are an expert prompt engineer for anime-style image models (NovelAI Diffusion / Illustrious / SDXL).',
@@ -90,6 +97,7 @@ const defaultSettings = Object.freeze({
     seed: '',
     advancedOverrides: '',
     ...PROVIDER_DEFAULTS,
+    ...MCP_DEFAULTS,
     ...LLM_PRESET_DEFAULTS,
     ...SCENE_DEFAULTS,
     ...INLINE_DEFAULTS,
@@ -140,7 +148,8 @@ function unlockedToken() {
     return novelSessionToken;
 }
 
-function createImageClient(plan) {
+function createImageClient(plan, settings) {
+    if (plan.provider === 'anima-mcp') return mcpImages.client(mcpUi.client(settings));
     return plan.provider === 'novelai' ? novelai.client(unlockedToken()) : getPanelClient(plan.connection);
 }
 
@@ -259,7 +268,13 @@ async function generatePrompt(messageId, message, signal, settings = getSettings
             profileId: connectionMode === 'profile' ? settings.profileId : undefined, messages, maxTokens,
         });
         const started = Date.now();
-        const result = await sendPromptRequest({ settings, messages, maxTokens, signal: requestSignal, preset, context, manualLlm });
+        if (settings.mcpPromptEnabled) assertMcpLlmSupport(settings, context);
+        const expectedProfile = settings.mcpPromptEnabled ? profileFingerprint(settings, context, mcpProxyPresets) : undefined;
+        const result = settings.mcpPromptEnabled
+            ? await runMcpPromptLoop({ settings, messages, mcp: mcpUi.client(settings), signal: requestSignal, log,
+                sendTurn: (turnMessages, tools, signal) => sendMcpTurn({ settings, context: SillyTavern.getContext(), manualLlm, preset,
+                    messages: turnMessages, tools, signal, maxTokens, expectedProfile, proxyPresets: mcpProxyPresets }) })
+            : await sendPromptRequest({ settings, messages, maxTokens, signal: requestSignal, preset, context, manualLlm });
         requestSignal.throwIfAborted();
         const content = typeof result === 'string' ? result : result?.content;
         log?.add('llm', '已收到 LLM 回覆', { data: { durationMs: Date.now() - started, characters: String(content ?? '').length } });
@@ -324,7 +339,7 @@ async function generatePrompt(messageId, message, signal, settings = getSettings
  */
 async function reviewPrompt(prompt, provider) {
     const { callGenericPopup, POPUP_TYPE } = SillyTavern.getContext();
-    const destination = provider === 'novelai' ? 'NovelAI 官方 API（可能消耗 Anlas）' : 'ComfyUI on Modal';
+    const destination = provider === 'novelai' ? 'NovelAI 官方 API（可能消耗 Anlas）' : provider === 'anima-mcp' ? 'Anima MCP（可能喚醒 GPU 並計費）' : 'ComfyUI on Modal';
     const result = await callGenericPopup(
         `<h3>檢視 / 編輯圖片提示詞</h3><p>確認後將送往 ${destination} 生成圖片。</p>`,
         POPUP_TYPE.INPUT,
@@ -440,7 +455,7 @@ async function generateImages(payload, signal, onEvent, client, onJob) {
  */
 function describeEvent(event) {
     switch (event?.type) {
-        case 'accepted': return event.provider === 'novelai' ? 'NovelAI 任務已接受，等待官方生圖回應…' : '請求已接受，準備送往 ComfyUI…';
+        case 'accepted': return event.provider === 'novelai' ? 'NovelAI 任務已接受，等待官方生圖回應…' : event.provider === 'anima-mcp' ? 'MCP 請求已開始，等待圖片回傳（不提供逐步進度）…' : '請求已接受，準備送往 ComfyUI…';
         case 'queued': return event.position !== undefined ? `排隊中（前方 ${event.position} 個任務）…` : '已進入 ComfyUI 佇列…';
         case 'warming': return `GPU 容器喚醒中（${event.stage ?? ''} ${Math.round(event.elapsed_seconds ?? 0)}s）…`;
         case 'submitting': return `送出工作流（${event.nodes ?? '?'} 個節點）…`;
@@ -563,21 +578,22 @@ async function onMessageButtonClick($button, slotId) {
     if (!settings.enabled) return;
     const plan = providerConnection(settings);
     const novel = settings.provider === 'novelai';
-    const title = `Custom Text2Img · ${novel ? 'NovelAI' : 'ComfyUI / Modal'}`;
+    const mcpProvider = settings.provider === 'anima-mcp';
+    const title = `Custom Text2Img · ${novel ? 'NovelAI' : mcpProvider ? 'Anima MCP' : 'ComfyUI / Modal'}`;
     const messageId = Number($button.closest('.mes').attr('mesid'));
     const message = context.chat[messageId];
     if (!isAssistantSceneMessage(message)) return;
     if (activeMessages.has(message)) { toastr.warning('此樓層仍有任務進行中，請先等待或停止。', title); return; }
     const slot = inlineSlots(message).find(item => item.id === slotId);
     if (!slot) { toastr.warning('請先分析正文，再點選有效的插圖標籤。', title); return; }
-    const log = startLog(novel ? 'novelai' : 'comfy-modal', messageId, settings);
+    const log = startLog(settings.provider, messageId, settings);
     log.add('start', '開始生成插圖');
     if (!message || !String(message.mes ?? '').trim()) {
         log.add('validation', '找不到樓層文字。', { level: 'warn' });
         toastr.warning('找不到樓層文字。', title);
         return;
     }
-    if (!novel && (!settings.baseUrl.trim() || !settings.password)) {
+    if (!novel && !mcpProvider && (!settings.baseUrl.trim() || !settings.password)) {
         log.add('validation', '請先填寫 ComfyUI 控制面板的 Base URL 與密碼。', { level: 'error' });
         toastr.error('請先填寫 ComfyUI 控制面板的 Base URL 與密碼。', title);
         return;
@@ -603,7 +619,7 @@ async function onMessageButtonClick($button, slotId) {
 
     try {
         update('prepare', '檢查圖片來源連線與憑證…');
-        const client = createImageClient(plan);
+        const client = createImageClient(plan, settings);
         await client.prepare(signal);
         signal.throwIfAborted();
         update('prompt', '使用此插圖標籤已保存的提示詞…');
@@ -624,6 +640,8 @@ async function onMessageButtonClick($button, slotId) {
         stage = 'payload';
         if (novel) {
             payload = buildNovelPayload(prompt, settings);
+        } else if (mcpProvider) {
+            payload = buildMcpPayload(prompt, settings);
         } else {
             update('preset', '讀取面板預設組合…');
             payload = buildGeneratePayload(prompt, await loadSelectedPreset(signal, settings, client), settings);
@@ -711,7 +729,8 @@ async function onMessageButtonClick($button, slotId) {
         if (signal.aborted) {
             const warning = novel
                 ? '已停止等待。NovelAI 仍可能扣點；目前分頁仍會接收結果，關閉或重整會遺失未保存圖片，勿立即重複生成。'
-                : '已停止等待。已提交的生圖仍會繼續，可在圖片控制面板歷史紀錄取回。';
+                : mcpProvider ? '已停止等待。MCP 生圖可能仍計費，本分頁仍會接收結果；重整會遺失未保存結果，可在 MCP 主機 output/browser 或面板歷史取回。'
+                    : '已停止等待。已提交的生圖仍會繼續，可在圖片控制面板歷史紀錄取回。';
             log.add(stage, warning, { level: 'warn' });
             toastr.info(warning, title);
         } else {
@@ -1265,6 +1284,7 @@ async function init() {
     startLog('runtime').add('init', 'Custom Text2Img 已初始化（瀏覽器直連；日誌僅存於本分頁）');
     loadSettingsIntoUi();
     bindSettingsUi();
+    mcpUi.mount({ getSettings, saveSettings, startLog });
 
     $(document).on('click', `.${ANALYZE_CLASS}, .cmi-inline-generate`, function (event) {
         // A rendered LLM tag is passive. Only a real user gesture may submit work.
@@ -1307,7 +1327,7 @@ async function init() {
         if (getSettings().provider === 'novelai') refreshNovelStatus();
     });
     window.addEventListener('beforeunload', (event) => {
-        if (!novelai.busy) return;
+        if (!novelai.busy && !mcpImages.busy) return;
         event.preventDefault();
         event.returnValue = '';
     });

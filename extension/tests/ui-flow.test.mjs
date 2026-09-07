@@ -6,6 +6,10 @@ import { generateWithPolling } from '../generation.js';
 import { PROVIDER_DEFAULTS, SETTINGS_KEY, migrateSettings, providerConnection, buildNovelPayload } from '../providers.js';
 import { createNovelAI } from '../novelai.js';
 import { createPanelClient } from '../panel.js';
+import { createMcpImages } from '../mcp-images.js';
+import { createMcpUi } from '../mcp-ui.js';
+import { MCP_DEFAULTS, buildMcpPayload } from '../mcp-client.js';
+import { assertMcpLlmSupport, profileFingerprint, runMcpPromptLoop, sendMcpTurn } from '../mcp-prompts.js';
 import { normalizeToken } from '../http.js';
 import { createManualLlmClient, parseExtraHeaders } from '../manual-llm.js';
 import { encryptToken, decryptToken } from '../token-vault.js';
@@ -84,6 +88,7 @@ function fixture({ provider = 'novelai', configured = true, onSubmit = () => {},
         toastr: Object.fromEntries(['info', 'warning', 'error', 'success', 'clear'].map(kind => [kind, (...args) => { notifications.push({ kind, args }); return toast; }])),
         MEDIA_DISPLAY: { GALLERY: 'gallery' }, MEDIA_SOURCE: { GENERATED: 'generated' }, MEDIA_TYPE: { IMAGE: 'image' }, SCROLL_BEHAVIOR: { KEEP: 'keep' },
         PROVIDER_DEFAULTS, migrateSettings, providerConnection, buildNovelPayload, normalizeToken, encryptToken, decryptToken,
+        MCP_DEFAULTS, buildMcpPayload, createMcpImages, createMcpUi, assertMcpLlmSupport, profileFingerprint, runMcpPromptLoop, sendMcpTurn, mcpProxyPresets: [],
         createManualLlmClient: options => createManualLlmClient({ fetchImpl: fakeFetch, ...options }), parseExtraHeaders,
         generateWithPolling: options => generateWithPolling({ ...options, delay: async signal => { await new Promise(resolve => setImmediate(resolve)); } }),
         createNovelAI: () => api, createPanelClient: connection => createPanelClient(connection, { fetchImpl: fakeFetch }),

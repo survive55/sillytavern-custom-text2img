@@ -17,4 +17,16 @@
 - ComfyUI／Modal 直接呼叫已更新面板的 `/api/browser` API；仍保留預設、LoRA、覆寫參數、64-bit Seed 和任務輪詢。
 - NovelAI 未完成／未保存的結果可能在關閉或重整網頁時遺失；停止等待不代表退款。
 
+## Anima MCP（v3.3，選配）
+
+新增「Anima MCP」設定與生圖來源，搭配 Mcp-image 的 `browser_server.py`（帶 Bearer 驗證與 ST Origin 白名單的 HTTP 入口）。原 stdio 入口不能直接由瀏覽器使用。
+
+- 提示詞工具預設關閉，開啟後只允許勾選的五個 Anima 提示詞工具；生圖仍需點正文按鈕。
+- MCP Token 僅存分頁，綁定端點；重整或修改網址後重新貼上並套用。
+- 手動 OpenAI 相容 LLM 支援工具循環；CM 需另勾「安全工具傳輸」，只用 profile 路由／模型／Key，不繼承其自訂 body／Headers。原生 Claude／Gemini／Cohere、Text Completion、o1／o3／o4／GPT-5 工具模式暫不支援。其他原功能不變。
+- 生圖結果以內嵌圖片回傳，支援完整 64-bit Seed；停止等待不取消 GPU，不自動重送。重整可能遺失尚未保存結果；MCP 主機 output/browser 保留副本。
+- 啟動範例（MCP 主機）：先在其私密環境設定 ANIMA_MCP_HTTP_TOKEN，再執行 `venv/bin/python browser_server.py --port 8766 --origin http://127.0.0.1:8001`。手機／遠端需 HTTPS 反向代理與精確來源白名單。
+
+完整設定與限制見專案 `docs/anima-mcp.md`。MCP 獨立 CM 適配目前以 ST 1.18.0 驗證，不宣稱所有舊版均已實測。
+
 需要 SillyTavern >= 1.14.0 與新版瀏覽器；只有使用設定檔模式時才需要啟用 Connection Manager（v3.0.2 起向後相容至 1.14.0；不支援 1.13.x 的舊圖片格式）；Token 加密需 HTTPS／localhost。完整安裝、安全注意及遷移說明見 [專案 README](https://github.com/survive55/sillytavern-custom-text2img#readme)。

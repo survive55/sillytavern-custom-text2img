@@ -32,8 +32,52 @@
             <select id="cmi_provider" class="text_pole">
                 <option value="comfy-modal">ComfyUI / Modal 控制面板</option>
                 <option value="novelai">NovelAI 官方 API</option>
+                <option value="anima-mcp">Anima ComfyUI MCP</option>
             </select>
-            <small class="cmi-hint">兩個來源的圖片參數各自保存；共用下方獨立的提示詞 LLM（Connection Manager 或手動 OpenAI 相容 API），不更動主聊天設定。</small>
+            <small class="cmi-hint">各來源的圖片參數各自保存；共用下方獨立的提示詞 LLM（Connection Manager 或手動 OpenAI 相容 API），不更動主聊天設定。</small>
+
+            <details id="cmi_mcp_section" class="cmi-section">
+                <summary><b>Anima MCP：提示詞工具與生圖連線</b></summary>
+                <small class="cmi-hint">需啟動 Mcp-image 的 browser_server.py（不是原始 stdio 入口），並允許目前 ST Origin。瀏覽器直接連線，不需要 ST 後端插件。HTTP localhost 指使用瀏覽器的裝置；遠端／手機請用可信 HTTPS 反向代理。</small>
+                <label for="cmi_mcp_url">MCP HTTP 端點</label><input id="cmi_mcp_url" class="text_pole" type="url" placeholder="http://127.0.0.1:8766/mcp" />
+                <label for="cmi_mcp_token">MCP 專用 Bearer Token（不是面板密碼或 LLM Key）</label><input id="cmi_mcp_token" class="text_pole" type="password" autocomplete="off" />
+                <div class="flex-container flexGap5">
+                    <button id="cmi_mcp_apply" type="button" class="menu_button">套用 Token（僅本分頁）</button>
+                    <button id="cmi_mcp_lock" type="button" class="menu_button">清除 Token</button>
+                    <button id="cmi_mcp_test" type="button" class="menu_button">測試連線／列工作流</button>
+                </div>
+                <small id="cmi_mcp_status" class="cmi-status" role="status">Token 不存入 ST 設定／備份；重整或修改 MCP 網址後需重新套用。</small>
+                <hr />
+                <label class="checkbox_label"><input id="cmi_mcp_enabled" type="checkbox" /><span>分析正文時啟用 Anima 提示詞工具（不生圖）</span></label>
+                <div id="cmi_mcp_tools"></div>
+                <label class="checkbox_label"><input id="cmi_mcp_skill" type="checkbox" /><span>分析時讀取 pomelo://SKILL.md 作為 Anima 參考資料</span></label>
+                <label for="cmi_mcp_rounds">最多工具輪數（1–10；總計最多 20 次呼叫）</label><input id="cmi_mcp_rounds" class="text_pole" type="number" min="1" max="10" />
+                <small class="cmi-hint">需要支援 OpenAI Chat Completions tool_calls 的獨立 LLM。工具回覆只留在本次分析，不寫入主聊天。只允許勾選的五種提示詞工具；模型無權呼叫生圖或列出 GPU 模型。</small>
+                <label class="checkbox_label"><input id="cmi_mcp_profile_transport" type="checkbox" /><span>允許 Connection Manager 安全工具傳輸（僅 OpenAI／DeepSeek／OpenRouter／Custom）</span></label>
+                <small class="cmi-hint">此選項僅影響開啟 MCP 的分析：只使用 profile 的路由／模型／Key，不套用該連線預設的自訂 Headers、body 或其他生成設定；本插件匯入的 LLM 提示詞與取樣參數仍保留。依賴自訂驗證 Headers 的服務請用手動 API。Text Completion、原生 Claude／Gemini／Cohere，以及需專用參數適配的 o1／o3／o4／GPT-5 工具模式暫不支援；非保留 tools 的後處理會被拒絕。不修改主聊天或原 profile。</small>
+                <div class="cmi-warning">啟用後，模型選出的查詢／提示詞會傳給此 MCP，其回覆與參考資料會傳給獨立 LLM，可能增加 LLM 費用。只连接可信服務。Token 相同的連線共享 MCP 主機權限；此入口是單一可信使用者用途，不是多租戶隔離服務。</div>
+                <div data-cmi-provider="anima-mcp" style="display:none;">
+                    <hr /><b>MCP 生圖參數（點擊正文按鈕才生成）</b>
+                    <label for="cmi_mcp_api">生圖後端</label><select id="cmi_mcp_api" class="text_pole"><option value="auto">Auto（MCP 主機決定）</option><option value="panel">Panel</option><option value="comfyui">ComfyUI 直連</option></select>
+                    <label for="cmi_mcp_workflow">工作流名稱（留空用預設；Panel 必須留空）</label><input id="cmi_mcp_workflow" class="text_pole" type="text" placeholder="測試連線列出的名稱，不接受檔案路徑" />
+                    <div class="flex-container flexGap10">
+                        <div class="flex1"><label for="cmi_mcp_width">寬</label><input id="cmi_mcp_width" class="text_pole" type="number" min="64" max="2048" step="8" /></div>
+                        <div class="flex1"><label for="cmi_mcp_height">高</label><input id="cmi_mcp_height" class="text_pole" type="number" min="64" max="2048" step="8" /></div>
+                        <div class="flex1"><label for="cmi_mcp_batch">批次</label><input id="cmi_mcp_batch" class="text_pole" type="number" min="1" max="4" /></div>
+                    </div>
+                    <label for="cmi_mcp_seed">Seed（64-bit；空白／-1 為隨機）</label><input id="cmi_mcp_seed" class="text_pole" type="text" />
+                    <label for="cmi_mcp_negative">負向提示詞</label><textarea id="cmi_mcp_negative" class="text_pole" rows="3"></textarea>
+                    <div class="flex-container flexGap10">
+                        <div class="flex1"><label for="cmi_mcp_steps">Steps（留空沿用）</label><input id="cmi_mcp_steps" class="text_pole" type="number" min="1" max="100" /></div>
+                        <div class="flex1"><label for="cmi_mcp_cfg">CFG（留空沿用）</label><input id="cmi_mcp_cfg" class="text_pole" type="number" min="0" max="30" step="0.1" /></div>
+                    </div>
+                    <label for="cmi_mcp_sampler">Sampler（留空沿用）</label><input id="cmi_mcp_sampler" class="text_pole" type="text" />
+                    <label for="cmi_mcp_scheduler">Scheduler（留空沿用）</label><input id="cmi_mcp_scheduler" class="text_pole" type="text" />
+                    <button id="cmi_mcp_dry_run" type="button" class="menu_button">Dry-run 參數測試（不生圖）</button>
+                    <small class="cmi-hint">Dry-run 使用固定風景提示詞，只離線檢查參數／工作流，不驗證實際模型、GPU 或面板權限。總計最多 4194304 像素，圖片每張最多 8 MiB。圖片透過 MCP 內嵌資料傳回，不讀取任意伺服器檔案。</small>
+                    <div class="cmi-warning">實際生成可能喚醒 GPU 並計費，失敗不自動重送。停止等待不取消生成；本分頁仍接收結果。重整可能遺失未存入 ST 的結果，可在 MCP 主機 output/browser 或面板歷史取回。頁面圖片暫存 30 分鐘，不提供逐步取樣進度。</div>
+                </div>
+            </details>
 
             <div class="inline-drawer cmi-section" data-cmi-provider="comfy-modal">
                 <div class="inline-drawer-toggle inline-drawer-header">
@@ -183,7 +227,7 @@
                         <small class="cmi-hint">匯入 ST Chat Completion 預設（prompts / prompt_order），或舊版 main_prompt / nsfw_prompt / jailbreak_prompt。只存入本插件，不切換或覆蓋 ST 主預設。API 網址、金鑰、Headers 與模型仍由上方連線決定。</small>
                         <small class="cmi-hint">與原生 ST 一致：以所選 prompt_order 的 enabled 開關為準，再套用 trigger；prompts 內的 enabled 不參與啟用判定。順序未明確啟用的條目不送出。匯入預設 prompts 中 role 為 user 的一般提示詞項目略過（chatHistory／dialogueExamples 容器除外，其內部訊息保留實際角色），不展開巨集、不送給 LLM（含 In-Chat）；獨立面板手動輸入與角色對話範例不受此篩選影響。其餘按角色、相對順序與 In-Chat 深度組裝訊息，生成類型為 quiet。Chat History 放入所選前文與目標樓層，不讀取之後的樓層；未列出此 marker 時自動放入場景，明確停用則不放入（可改用 \{{message}}）。此模式不附加下方舊 System / User 模板。</small>
                         <small class="cmi-hint">正文標籤模式只使用 JSON 場景規劃，不開啟舊版獨立提示詞／HTML 互動面板。原生 extensions.regex_scripts 仍依開關、深度和用途處理；不讀取主聊天／全域正則，不混用 SPreset。預設巨集變數在本次分析中獨立。</small>
-                        <small class="cmi-hint">不執行世界書掃描、酒館助手腳本、STscript、工具或完整聊天生成流程；未支援巨集保留為文字並警告。舊版匯入未保存正則，請重新匯入原始 JSON。</small>
+                        <small class="cmi-hint">不執行世界書掃描、酒館助手腳本、STscript、主聊天工具或完整聊天生成流程；Anima MCP 工具需在其獨立區塊明確開啟；未支援巨集保留為文字並警告。舊版匯入未保存正則，請重新匯入原始 JSON。</small>
                     </div>
                     <details class="cmi-inline-settings"><summary>正文多插圖（全手動）</summary>
                         <p>樓層「⋯」→「分析正文／插入生圖按鈕」（多圖圖示）：只請 LLM 規劃場景，不生圖。再逐一點擊正文按鈕，才向目前圖片來源提交該場景；每個位置沿用圖片批次設定，圖片只顯示在對應標籤，不再附加底部圖集；舊魔杖入口已移除。</p>

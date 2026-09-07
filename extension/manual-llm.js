@@ -102,7 +102,7 @@ function safeError(status) {
 }
 
 export function createManualLlmClient({ fetchImpl = (...args) => fetch(...args), timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
-    async function send(settings, messages, maxTokens, signal, parameters = {}) {
+    async function send(settings, messages, maxTokens, signal, parameters = {}, toolOptions = null) {
         if (signal?.aborted) throw new ManualLlmError(499, '手動 LLM 請求已取消。');
         const model = String(settings.manualLlmModel ?? '').trim();
         if (!model) throw new ManualLlmError(400, '請填寫手動 LLM 模型名稱。');
@@ -127,7 +127,8 @@ export function createManualLlmClient({ fetchImpl = (...args) => fetch(...args),
             const response = await fetchImpl(url, {
                 method: 'POST', mode: 'cors', credentials: 'omit', redirect: 'error', referrerPolicy: 'no-referrer',
                 headers,
-                body: JSON.stringify({ ...presetSampling(parameters), model, messages, max_tokens: Math.max(1, Number(maxTokens) || 1), stream: false }),
+                body: JSON.stringify({ ...presetSampling(parameters), model, messages, max_tokens: Math.max(1, Number(maxTokens) || 1), stream: false,
+                    ...(toolOptions ? { tools: toolOptions.tools, tool_choice: 'auto', parallel_tool_calls: false, n: 1 } : {}) }),
                 signal: controller.signal,
             });
             if (!response.ok) {
@@ -147,7 +148,7 @@ export function createManualLlmClient({ fetchImpl = (...args) => fetch(...args),
             } catch {
                 throw new ManualLlmError(502, '手動 LLM 回傳的內容不是有效 JSON。');
             }
-            return extractContent(data);
+            return toolOptions ? data : extractContent(data);
         } catch (error) {
             if (error instanceof ManualLlmError) throw error;
             if (signal?.aborted) throw new ManualLlmError(499, '手動 LLM 請求已取消。');

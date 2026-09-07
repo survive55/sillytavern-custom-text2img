@@ -38,7 +38,7 @@ export function migrateSettings(container, defaults) {
             changed = true;
         }
     }
-    if (!['comfy-modal', 'novelai'].includes(settings.provider)) {
+    if (!['comfy-modal', 'novelai', 'anima-mcp'].includes(settings.provider)) {
         settings.provider = 'comfy-modal';
         changed = true;
     }
@@ -46,6 +46,7 @@ export function migrateSettings(container, defaults) {
 }
 
 export function providerConnection(settings) {
+    if (settings.provider === 'anima-mcp') return { provider: 'anima-mcp' };
     if (settings.provider === 'novelai') return { provider: 'novelai' };
     if (settings.provider !== 'comfy-modal') throw new Error('不支援的生圖來源');
     return { provider: 'comfy-modal', connection: { baseUrl: String(settings.baseUrl ?? '').trim(), password: settings.password } };
